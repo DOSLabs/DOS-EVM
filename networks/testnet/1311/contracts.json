@@ -1,0 +1,100 @@
+[
+    {
+        "address": "0xc6F4f3758a89a848fb94aD56b0E707278De21D34",
+        "name": "AVAX",
+        "symbol": "AVAX",
+        "description":"An ERC-20 version of the native AVAX token. Avalanche is the fastest smart contracts platform in the blockchain industry, as measured by time-to-finality, and has the most validators securing its activity of any proof-of-stake protocol.",
+        "contractType": "ERC-20",
+        "decimals": 18,
+        "logoUrl": "https://raw.githubusercontent.com/DOSLabs/tokenlist/main/img/avax/logo.png",
+        "officialSite": "https://www.avax.network/", 
+        "resourceLinks": [
+            { 
+            "type": "Blog", 
+            "url": "https://medium.com/avalancheavax" 
+            }, 
+            { 
+            "type": "Reddit", 
+            "url": "https://www.reddit.com/r/Avax/" 
+            }, 
+            { 
+            "type": "Facebook", 
+            "url": "https://www.facebook.com/avalabsofficial/" 
+            }, 
+            { 
+            "type": "Twitter", 
+            "url": "https://twitter.com/avalancheavax" 
+            }, 
+            { 
+            "type": "Github", 
+            "url": "https://github.com/ava-labs" 
+            }, 
+            { 
+            "type": "Telegram", 
+            "url": "https://t.me/avalancheavax" 
+            }, 
+            { 
+            "type": "LinkedIn", 
+            "url": "https://www.linkedin.com/company/avalabsofficial/mycompany/" }, 
+            { 
+            "type": "Discord", 
+            "url": "https://discord.com/invite/RwXY7P6" 
+            }, 
+            { 
+            "type": "Whitepaper", 
+            "url": "https://www.avalabs.org/whitepapers" 
+            }, 
+            { 
+            "type": "Support", 
+            "url": "https://support.avax.network/en/" 
+            }, 
+            { 
+            "type": "CoinMarketCap",
+            "url": "https://coinmarketcap.com/currencies/avalanche/" }, 
+            { 
+            "type": "CoinGecko", 
+            "url": "https://www.coingecko.com/en/coins/avalanche" } 
+        ] 
+    },
+    {
+        "address": "0x0e07e7d8a77e40c27F10BCE8a863D846874Aa467",
+        "name": "Tether",
+        "symbol": "USDT",
+        "description":"Tether gives you the joint benefits of open blockchain technology and traditional currency by converting your cash into a stable digital currency equivalent.",
+        "contractType": "ERC-20",
+        "decimals": 18,
+        "logoUrl": "https://raw.githubusercontent.com/DOSLabs/tokenlist/main/img/usdt/logo.png",
+        "officialSite": "https://tether.to/", 
+        "resourceLinks": [
+            { 
+            "type": "Facebook", 
+            "url": "https://www.facebook.com/tether.to" 
+            }, 
+            { 
+            "type": "Twitter", 
+            "url": "https://twitter.com/Tether_to/" 
+            }, 
+            { 
+            "type": "Telegram", 
+            "url": "https://t.me/OfficialTether" 
+            }, 
+            { 
+            "type": "LinkedIn", 
+            "url": "https://www.linkedin.com/company/tether/" }, 
+            { 
+            "type": "Whitepaper", 
+            "url": "https://tether.to/en/whitepaper/" 
+            }, 
+            { 
+            "type": "Support", 
+            "url": "support@tether.to" 
+            }, 
+            { 
+            "type": "CoinMarketCap",
+            "url": "https://coinmarketcap.com/currencies/tether/" }, 
+            { 
+            "type": "CoinGecko", 
+            "url": "https://www.coingecko.com/en/coins/tether" } 
+        ] 
+    }
+]
