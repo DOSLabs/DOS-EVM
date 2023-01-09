@@ -14,7 +14,7 @@
 | Eth Chain ID          | 1311                                                                                       |
 | RPC URL               | https://test.doschain.com/jsonrpc                                                          | 
 | Description           | Dos EVM subnet.                                                                            |
-| Site                  | https://www.doschain.io/                                                                   | 
+| Site                  | https://doschain.com                                                                   | 
 | Multicall2 contracts  | 0x05feFA2A7286427d8902bbC3F8f01398b0b825fD                                                 |
 
 
