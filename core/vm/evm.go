@@ -30,11 +30,15 @@ import (
 	"fmt"
 	"math/big"
 	"sync/atomic"
-	"time"
 
+	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/subnet-evm/constants"
 	"github.com/ava-labs/subnet-evm/params"
-	"github.com/ava-labs/subnet-evm/precompile"
+	"github.com/ava-labs/subnet-evm/precompile/contract"
+	"github.com/ava-labs/subnet-evm/precompile/contracts/deployerallowlist"
+	"github.com/ava-labs/subnet-evm/precompile/modules"
+	"github.com/ava-labs/subnet-evm/precompile/precompileconfig"
+	"github.com/ava-labs/subnet-evm/predicate"
 	"github.com/ava-labs/subnet-evm/vmerrs"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -42,8 +46,8 @@ import (
 )
 
 var (
-	_ precompile.PrecompileAccessibleState = &EVM{}
-	_ precompile.BlockContext              = &BlockContext{}
+	_ contract.AccessibleState = &EVM{}
+	_ contract.BlockContext    = &BlockContext{}
 )
 
 // IsProhibited returns true if [addr] is in the prohibited list of addresses which should
@@ -53,7 +57,7 @@ func IsProhibited(addr common.Address) bool {
 		return true
 	}
 
-	return precompile.ReservedAddress(addr)
+	return modules.ReservedAddress(addr)
 }
 
 // emptyCodeHash is used by create to ensure deployment is disallowed to already
@@ -70,8 +74,8 @@ type (
 	GetHashFunc func(uint64) common.Hash
 )
 
-func (evm *EVM) precompile(addr common.Address) (precompile.StatefulPrecompiledContract, bool) {
-	var precompiles map[common.Address]precompile.StatefulPrecompiledContract
+func (evm *EVM) precompile(addr common.Address) (contract.StatefulPrecompiledContract, bool) {
+	var precompiles map[common.Address]contract.StatefulPrecompiledContract
 	switch {
 	case evm.chainRules.IsSubnetEVM:
 		precompiles = PrecompiledContractsBerlin
@@ -90,8 +94,12 @@ func (evm *EVM) precompile(addr common.Address) (precompile.StatefulPrecompiledC
 	}
 
 	// Otherwise, check the chain rules for the additionally configured precompiles.
-	p, ok = evm.chainRules.Precompiles[addr]
-	return p, ok
+	if _, ok = evm.chainRules.ActivePrecompiles[addr]; ok {
+		module, ok := modules.GetPrecompileModuleByAddress(addr)
+		return module.Contract, ok
+	}
+
+	return nil, false
 }
 
 // BlockContext provides the EVM with auxiliary information. Once provided
@@ -104,12 +112,15 @@ type BlockContext struct {
 	Transfer TransferFunc
 	// GetHash returns the hash corresponding to n
 	GetHash GetHashFunc
+	// PredicateResults are the results of predicate verification available throughout the EVM's execution.
+	// PredicateResults may be nil if it is not encoded in the block's header.
+	PredicateResults *predicate.Results
 
 	// Block information
 	Coinbase    common.Address // Provides information for COINBASE
 	GasLimit    uint64         // Provides information for GASLIMIT
 	BlockNumber *big.Int       // Provides information for NUMBER
-	Time        *big.Int       // Provides information for TIME
+	Time        uint64         // Provides information for TIME
 	Difficulty  *big.Int       // Provides information for DIFFICULTY
 	BaseFee     *big.Int       // Provides information for BASEFEE
 }
@@ -118,8 +129,15 @@ func (b *BlockContext) Number() *big.Int {
 	return b.BlockNumber
 }
 
-func (b *BlockContext) Timestamp() *big.Int {
+func (b *BlockContext) Timestamp() uint64 {
 	return b.Time
+}
+
+func (b *BlockContext) GetPredicateResults(txHash common.Hash, address common.Address) []byte {
+	if b.PredicateResults == nil {
+		return nil
+	}
+	return b.PredicateResults.GetResults(txHash, address)
 }
 
 // TxContext provides the EVM with information about a transaction.
@@ -178,7 +196,7 @@ func NewEVM(blockCtx BlockContext, txCtx TxContext, statedb StateDB, chainConfig
 		chainConfig: chainConfig,
 		chainRules:  chainConfig.AvalancheRules(blockCtx.BlockNumber, blockCtx.Time),
 	}
-	evm.interpreter = NewEVMInterpreter(evm, config)
+	evm.interpreter = NewEVMInterpreter(evm)
 	return evm
 }
 
@@ -200,19 +218,31 @@ func (evm *EVM) Cancelled() bool {
 	return atomic.LoadInt32(&evm.abort) == 1
 }
 
+// GetSnowContext returns the evm's snow.Context.
+func (evm *EVM) GetSnowContext() *snow.Context {
+	return evm.chainConfig.SnowCtx
+}
+
 // GetStateDB returns the evm's StateDB
-func (evm *EVM) GetStateDB() precompile.StateDB {
+func (evm *EVM) GetStateDB() contract.StateDB {
 	return evm.StateDB
 }
 
 // GetBlockContext returns the evm's BlockContext
-func (evm *EVM) GetBlockContext() precompile.BlockContext {
+func (evm *EVM) GetBlockContext() contract.BlockContext {
 	return &evm.Context
 }
 
 // Interpreter returns the current interpreter
 func (evm *EVM) Interpreter() *EVMInterpreter {
 	return evm.interpreter
+}
+
+// SetBlockContext updates the block context of the EVM.
+func (evm *EVM) SetBlockContext(blockCtx BlockContext) {
+	evm.Context = blockCtx
+	num := blockCtx.BlockNumber
+	evm.chainRules = evm.chainConfig.AvalancheRules(num, blockCtx.Time)
 }
 
 // Call executes the contract associated with the addr with the given input as
@@ -240,7 +270,7 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 			if evm.Config.Debug {
 				if evm.depth == 0 {
 					evm.Config.Tracer.CaptureStart(evm, caller.Address(), addr, false, input, gas, value)
-					evm.Config.Tracer.CaptureEnd(ret, 0, 0, nil)
+					evm.Config.Tracer.CaptureEnd(ret, 0, nil)
 				} else {
 					evm.Config.Tracer.CaptureEnter(CALL, caller.Address(), addr, input, gas, value)
 					evm.Config.Tracer.CaptureExit(ret, 0, nil)
@@ -256,9 +286,9 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 	if evm.Config.Debug {
 		if evm.depth == 0 {
 			evm.Config.Tracer.CaptureStart(evm, caller.Address(), addr, false, input, gas, value)
-			defer func(startGas uint64, startTime time.Time) { // Lazy evaluation of the parameters
-				evm.Config.Tracer.CaptureEnd(ret, startGas-gas, time.Since(startTime), err)
-			}(gas, time.Now())
+			defer func(startGas uint64) { // Lazy evaluation of the parameters
+				evm.Config.Tracer.CaptureEnd(ret, startGas-gas, err)
+			}(gas)
 		} else {
 			// Handle tracer events for entering and exiting a call frame
 			evm.Config.Tracer.CaptureEnter(CALL, caller.Address(), addr, input, gas, value)
@@ -368,7 +398,11 @@ func (evm *EVM) DelegateCall(caller ContractRef, addr common.Address, input []by
 
 	// Invoke tracer hooks that signal entering/exiting a call frame
 	if evm.Config.Debug {
-		evm.Config.Tracer.CaptureEnter(DELEGATECALL, caller.Address(), addr, input, gas, nil)
+		// NOTE: caller must, at all times be a contract. It should never happen
+		// that caller is something other than a Contract.
+		parent := caller.(*Contract)
+		// DELEGATECALL inherits value from parent call
+		evm.Config.Tracer.CaptureEnter(DELEGATECALL, caller.Address(), addr, input, gas, parent.value)
 		defer func(startGas uint64) {
 			evm.Config.Tracer.CaptureExit(ret, startGas-gas, err)
 		}(gas)
@@ -475,7 +509,7 @@ func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64,
 	if !evm.Context.CanTransfer(evm.StateDB, caller.Address(), value) {
 		return nil, common.Address{}, gas, vmerrs.ErrInsufficientBalance
 	}
-	// If there is any collision with the Blackhole address, return an error instead
+	// If there is any collision with a prohibited address, return an error instead
 	// of allowing the contract to be created.
 	if IsProhibited(address) {
 		return nil, common.Address{}, gas, vmerrs.ErrAddrProhibited
@@ -496,8 +530,8 @@ func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64,
 		return nil, common.Address{}, 0, vmerrs.ErrContractAddressCollision
 	}
 	// If the allow list is enabled, check that [evm.TxContext.Origin] has permission to deploy a contract.
-	if evm.chainRules.IsContractDeployerAllowListEnabled {
-		allowListRole := precompile.GetContractDeployerAllowListStatus(evm.StateDB, evm.TxContext.Origin)
+	if evm.chainRules.IsPrecompileEnabled(deployerallowlist.ContractAddress) {
+		allowListRole := deployerallowlist.GetContractDeployerAllowListStatus(evm.StateDB, evm.TxContext.Origin)
 		if !allowListRole.IsEnabled() {
 			return nil, common.Address{}, 0, fmt.Errorf("tx.origin %s is not authorized to deploy a contract", evm.TxContext.Origin)
 		}
@@ -523,8 +557,6 @@ func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64,
 			evm.Config.Tracer.CaptureEnter(typ, caller.Address(), address, codeAndHash.code, gas, value)
 		}
 	}
-
-	start := time.Now()
 
 	ret, err := evm.interpreter.Run(contract, nil, false)
 
@@ -563,7 +595,7 @@ func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64,
 
 	if evm.Config.Debug {
 		if evm.depth == 0 {
-			evm.Config.Tracer.CaptureEnd(ret, gas-contract.Gas, time.Since(start), err)
+			evm.Config.Tracer.CaptureEnd(ret, gas-contract.Gas, err)
 		} else {
 			evm.Config.Tracer.CaptureExit(ret, gas-contract.Gas, err)
 		}
@@ -589,3 +621,6 @@ func (evm *EVM) Create2(caller ContractRef, code []byte, gas uint64, endowment *
 
 // ChainConfig returns the environment's chain configuration
 func (evm *EVM) ChainConfig() *params.ChainConfig { return evm.chainConfig }
+
+// GetChainConfig implements AccessibleState
+func (evm *EVM) GetChainConfig() precompileconfig.ChainConfig { return evm.chainConfig }

@@ -8,7 +8,7 @@
 //
 // Much love to the original authors for their work.
 // **********
-// Copyright 2021 The go-ethereum Authors
+// Copyright 2016 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -42,7 +42,7 @@ type Error struct {
 	str    string
 
 	// Sig contains the string signature according to the ABI spec.
-	// e.g.	error foo(uint32 a, int b) = "foo(uint32,int256)"
+	// e.g.	 error foo(uint32 a, int b) = "foo(uint32,int256)"
 	// Please note that "int" is substitute for its canonical representation "int256"
 	Sig string
 

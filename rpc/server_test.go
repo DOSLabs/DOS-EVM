@@ -54,7 +54,7 @@ func TestServerRegisterName(t *testing.T) {
 		t.Fatalf("Expected service calc to be registered")
 	}
 
-	wantCallbacks := 10
+	wantCallbacks := 13
 	if len(svc.callbacks) != wantCallbacks {
 		t.Errorf("Expected %d callbacks for service 'service', got %d", wantCallbacks, len(svc.callbacks))
 	}
@@ -151,7 +151,7 @@ func runTestScript(t *testing.T, file string) {
 // 		buf := make([]byte, 2000)
 // 		n, err := conn.Read(buf)
 // 		conn.Close()
-
+//
 // 		if err != nil {
 // 			t.Fatal("read error:", err)
 // 		}

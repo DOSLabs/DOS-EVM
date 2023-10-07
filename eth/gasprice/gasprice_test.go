@@ -38,17 +38,15 @@ import (
 	"github.com/ava-labs/subnet-evm/core/rawdb"
 	"github.com/ava-labs/subnet-evm/core/types"
 	"github.com/ava-labs/subnet-evm/core/vm"
-	"github.com/ava-labs/subnet-evm/ethdb"
 	"github.com/ava-labs/subnet-evm/params"
-	"github.com/ava-labs/subnet-evm/precompile"
+	"github.com/ava-labs/subnet-evm/precompile/contracts/feemanager"
 	"github.com/ava-labs/subnet-evm/rpc"
+	"github.com/ava-labs/subnet-evm/utils"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/stretchr/testify/require"
 )
-
-const testHead = 32
 
 var (
 	key, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
@@ -57,35 +55,26 @@ var (
 )
 
 type testBackend struct {
-	db      ethdb.Database
-	chain   *core.BlockChain
-	pending bool // pending block available
+	chain         *core.BlockChain
+	acceptedEvent chan<- core.ChainEvent
 }
 
 func (b *testBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
 	if number == rpc.LatestBlockNumber {
-		return b.chain.CurrentBlock().Header(), nil
+		return b.chain.CurrentBlock(), nil
 	}
 	return b.chain.GetHeaderByNumber(uint64(number)), nil
 }
 
 func (b *testBackend) BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Block, error) {
 	if number == rpc.LatestBlockNumber {
-		return b.chain.CurrentBlock(), nil
+		number = rpc.BlockNumber(b.chain.CurrentBlock().Number.Uint64())
 	}
 	return b.chain.GetBlockByNumber(uint64(number)), nil
 }
 
 func (b *testBackend) GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error) {
 	return b.chain.GetReceiptsByHash(hash), nil
-}
-
-func (b *testBackend) PendingBlockAndReceipts() (*types.Block, types.Receipts) {
-	if b.pending {
-		block := b.chain.GetBlockByNumber(testHead + 1)
-		return block, b.chain.GetReceiptsByHash(block.Hash())
-	}
-	return nil, nil
 }
 
 func (b *testBackend) ChainConfig() *params.ChainConfig {
@@ -96,29 +85,35 @@ func (b *testBackend) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) eve
 	return nil
 }
 
+func (b *testBackend) SubscribeChainAcceptedEvent(ch chan<- core.ChainEvent) event.Subscription {
+	b.acceptedEvent = ch
+	return nil
+}
+
 func (b *testBackend) GetFeeConfigAt(parent *types.Header) (commontype.FeeConfig, *big.Int, error) {
 	return b.chain.GetFeeConfigAt(parent)
 }
 
+func (b *testBackend) teardown() {
+	b.chain.Stop()
+}
+
 func newTestBackendFakerEngine(t *testing.T, config *params.ChainConfig, numBlocks int, genBlocks func(i int, b *core.BlockGen)) *testBackend {
-	gspec := &core.Genesis{
+	var gspec = &core.Genesis{
 		Config: config,
 		Alloc:  core.GenesisAlloc{addr: core.GenesisAccount{Balance: bal}},
 	}
 
 	engine := dummy.NewETHFaker()
-	db := rawdb.NewMemoryDatabase()
-	genesis := gspec.MustCommit(db)
 
 	// Generate testing blocks
-	blocks, _, err := core.GenerateChain(gspec.Config, genesis, engine, db, numBlocks, 0, genBlocks)
+	_, blocks, _, err := core.GenerateChainWithGenesis(gspec, engine, numBlocks, 0, genBlocks)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Construct testing chain
 	diskdb := rawdb.NewMemoryDatabase()
-	gspec.Commit(diskdb)
-	chain, err := core.NewBlockChain(diskdb, core.DefaultCacheConfig, gspec.Config, engine, vm.Config{}, common.Hash{})
+	chain, err := core.NewBlockChain(diskdb, core.DefaultCacheConfig, gspec, engine, vm.Config{}, common.Hash{}, false)
 	if err != nil {
 		t.Fatalf("Failed to create local chain, %v", err)
 	}
@@ -128,32 +123,30 @@ func newTestBackendFakerEngine(t *testing.T, config *params.ChainConfig, numBloc
 	return &testBackend{chain: chain}
 }
 
+// newTestBackend creates a test backend. OBS: don't forget to invoke tearDown
+// after use, otherwise the blockchain instance will mem-leak via goroutines.
 func newTestBackend(t *testing.T, config *params.ChainConfig, numBlocks int, genBlocks func(i int, b *core.BlockGen)) *testBackend {
-	gspec := &core.Genesis{
+	var gspec = &core.Genesis{
 		Config: config,
 		Alloc:  core.GenesisAlloc{addr: core.GenesisAccount{Balance: bal}},
 	}
 
 	engine := dummy.NewFaker()
-	db := rawdb.NewMemoryDatabase()
-	genesis := gspec.MustCommit(db)
 
 	// Generate testing blocks
-	blocks, _, err := core.GenerateChain(gspec.Config, genesis, engine, db, numBlocks, 1, genBlocks)
+	_, blocks, _, err := core.GenerateChainWithGenesis(gspec, engine, numBlocks, 1, genBlocks)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Construct testing chain
-	diskdb := rawdb.NewMemoryDatabase()
-	gspec.Commit(diskdb)
-	chain, err := core.NewBlockChain(diskdb, core.DefaultCacheConfig, gspec.Config, engine, vm.Config{}, common.Hash{})
+	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), core.DefaultCacheConfig, gspec, engine, vm.Config{}, common.Hash{}, false)
 	if err != nil {
 		t.Fatalf("Failed to create local chain, %v", err)
 	}
 	if _, err := chain.InsertChain(blocks); err != nil {
 		t.Fatalf("Failed to insert chain, %v", err)
 	}
-	return &testBackend{chain: chain, db: db}
+	return &testBackend{chain: chain}
 }
 
 func (b *testBackend) MinRequiredTip(ctx context.Context, header *types.Header) (*big.Int, error) {
@@ -165,7 +158,11 @@ func (b *testBackend) CurrentHeader() *types.Header {
 }
 
 func (b *testBackend) LastAcceptedBlock() *types.Block {
-	return b.chain.CurrentBlock()
+	current := b.chain.CurrentBlock()
+	if current == nil {
+		return nil
+	}
+	return b.chain.GetBlockByNumber(current.Number.Uint64())
 }
 
 func (b *testBackend) GetBlockByNumber(number uint64) *types.Block {
@@ -187,7 +184,7 @@ func defaultOracleConfig() Config {
 	}
 }
 
-//  timeCrunchOracleConfig returns a config with [MaxLookbackSeconds] set to 5
+// timeCrunchOracleConfig returns a config with [MaxLookbackSeconds] set to 5
 // to ensure that during gas price estimation, we will hit the time based look back limit
 func timeCrunchOracleConfig() Config {
 	return Config{
@@ -198,26 +195,48 @@ func timeCrunchOracleConfig() Config {
 }
 
 func applyGasPriceTest(t *testing.T, test suggestTipCapTest, config Config) {
-	t.Helper()
 	if test.genBlock == nil {
 		test.genBlock = func(i int, b *core.BlockGen) {}
 	}
 	backend := newTestBackend(t, test.chainConfig, test.numBlocks, test.genBlock)
 	oracle, err := NewOracle(backend, config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// mock time to be consistent across different CI runs
 	// sets currentTime to be 20 seconds
 	oracle.clock.Set(time.Unix(20, 0))
 
 	got, err := oracle.SuggestTipCap(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	backend.teardown()
+	require.NoError(t, err)
+
 	if got.Cmp(test.expectedTip) != 0 {
 		t.Fatalf("Expected tip (%d), got tip (%d)", test.expectedTip, got)
+	}
+}
+
+func testGenBlock(t *testing.T, tip int64, numTx int) func(int, *core.BlockGen) {
+	return func(i int, b *core.BlockGen) {
+		b.SetCoinbase(common.Address{1})
+
+		txTip := big.NewInt(tip * params.GWei)
+		signer := types.LatestSigner(params.TestChainConfig)
+		baseFee := b.BaseFee()
+		feeCap := new(big.Int).Add(baseFee, txTip)
+		for j := 0; j < numTx; j++ {
+			tx := types.NewTx(&types.DynamicFeeTx{
+				ChainID:   params.TestChainConfig.ChainID,
+				Nonce:     b.TxNonce(addr),
+				To:        &common.Address{},
+				Gas:       params.TxGas,
+				GasFeeCap: feeCap,
+				GasTipCap: txTip,
+				Data:      []byte{},
+			})
+			tx, err := types.SignTx(tx, signer, key)
+			require.NoError(t, err, "failed to create tx")
+			b.AddTx(tx)
+		}
 	}
 }
 
@@ -237,65 +256,19 @@ func TestSuggestTipCapNetworkUpgrades(t *testing.T) {
 }
 
 func TestSuggestTipCap(t *testing.T) {
-	txTip := big.NewInt(55 * params.GWei)
 	applyGasPriceTest(t, suggestTipCapTest{
 		chainConfig: params.TestChainConfig,
 		numBlocks:   3,
-		genBlock: func(i int, b *core.BlockGen) {
-			b.SetCoinbase(common.Address{1})
-
-			signer := types.LatestSigner(params.TestChainConfig)
-			baseFee := b.BaseFee()
-			feeCap := new(big.Int).Add(baseFee, txTip)
-			for j := 0; j < 370; j++ {
-				tx := types.NewTx(&types.DynamicFeeTx{
-					ChainID:   params.TestChainConfig.ChainID,
-					Nonce:     b.TxNonce(addr),
-					To:        &common.Address{},
-					Gas:       params.TxGas,
-					GasFeeCap: feeCap,
-					GasTipCap: txTip,
-					Data:      []byte{},
-				})
-				tx, err := types.SignTx(tx, signer, key)
-				if err != nil {
-					t.Fatalf("failed to create tx: %s", err)
-				}
-				b.AddTx(tx)
-			}
-		},
+		genBlock:    testGenBlock(t, 55, 370),
 		expectedTip: big.NewInt(643_500_643),
 	}, defaultOracleConfig())
 }
 
 func TestSuggestTipCapSimpleFloor(t *testing.T) {
-	txTip := big.NewInt(55 * params.GWei)
 	applyGasPriceTest(t, suggestTipCapTest{
 		chainConfig: params.TestChainConfig,
 		numBlocks:   1,
-		genBlock: func(i int, b *core.BlockGen) {
-			b.SetCoinbase(common.Address{1})
-
-			signer := types.LatestSigner(params.TestChainConfig)
-			baseFee := b.BaseFee()
-			feeCap := new(big.Int).Add(baseFee, txTip)
-			for j := 0; j < 370; j++ {
-				tx := types.NewTx(&types.DynamicFeeTx{
-					ChainID:   params.TestChainConfig.ChainID,
-					Nonce:     b.TxNonce(addr),
-					To:        &common.Address{},
-					Gas:       params.TxGas,
-					GasFeeCap: feeCap,
-					GasTipCap: txTip,
-					Data:      []byte{},
-				})
-				tx, err := types.SignTx(tx, signer, key)
-				if err != nil {
-					t.Fatalf("failed to create tx: %s", err)
-				}
-				b.AddTx(tx)
-			}
-		},
+		genBlock:    testGenBlock(t, 55, 370),
 		expectedTip: common.Big0,
 	}, defaultOracleConfig())
 }
@@ -347,81 +320,18 @@ func TestSuggestTipCapSmallTips(t *testing.T) {
 }
 
 func TestSuggestTipCapMinGas(t *testing.T) {
-	txTip := big.NewInt(500 * params.GWei)
 	applyGasPriceTest(t, suggestTipCapTest{
 		chainConfig: params.TestChainConfig,
 		numBlocks:   3,
-		genBlock: func(i int, b *core.BlockGen) {
-			b.SetCoinbase(common.Address{1})
-
-			signer := types.LatestSigner(params.TestChainConfig)
-			baseFee := b.BaseFee()
-			feeCap := new(big.Int).Add(baseFee, txTip)
-			for j := 0; j < 50; j++ {
-				tx := types.NewTx(&types.DynamicFeeTx{
-					ChainID:   params.TestChainConfig.ChainID,
-					Nonce:     b.TxNonce(addr),
-					To:        &common.Address{},
-					Gas:       params.TxGas,
-					GasFeeCap: feeCap,
-					GasTipCap: txTip,
-					Data:      []byte{},
-				})
-				tx, err := types.SignTx(tx, signer, key)
-				if err != nil {
-					t.Fatalf("failed to create tx: %s", err)
-				}
-				b.AddTx(tx)
-			}
-		},
+		genBlock:    testGenBlock(t, 500, 50),
 		expectedTip: big.NewInt(0),
 	}, defaultOracleConfig())
 }
 
-// Regression test to ensure that SuggestPrice does not panic prior to activation of Subnet EVM
+// Regression test to ensure that SuggestPrice does not panic with activation of Subnet EVM
 // Note: support for gas estimation without activated hard forks has been deprecated, but we still
 // ensure that the call does not panic.
-func TestSuggestGasPricePreSubnetEVM(t *testing.T) {
-	config := Config{
-		Blocks:     20,
-		Percentile: 60,
-	}
-
-	backend := newTestBackend(t, params.TestPreSubnetEVMConfig, 3, func(i int, b *core.BlockGen) {
-		b.SetCoinbase(common.Address{1})
-
-		signer := types.LatestSigner(params.TestPreSubnetEVMConfig)
-		gasPrice := big.NewInt(params.MinGasPrice)
-		for j := 0; j < 50; j++ {
-			tx := types.NewTx(&types.LegacyTx{
-				Nonce:    b.TxNonce(addr),
-				To:       &common.Address{},
-				Gas:      params.TxGas,
-				GasPrice: gasPrice,
-				Data:     []byte{},
-			})
-			tx, err := types.SignTx(tx, signer, key)
-			if err != nil {
-				t.Fatalf("failed to create tx: %s", err)
-			}
-			b.AddTx(tx)
-		}
-	})
-	oracle, err := NewOracle(backend, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = oracle.SuggestPrice(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-// Regression test to ensure that SuggestPrice does not panic prior to activation of SubnetEVM
-// Note: support for gas estimation without activated hard forks has been deprecated, but we still
-// ensure that the call does not panic.
-func TestSuggestGasPricePreAP3(t *testing.T) {
+func TestSuggestGasPriceSubnetEVM(t *testing.T) {
 	config := Config{
 		Blocks:     20,
 		Percentile: 60,
@@ -441,84 +351,33 @@ func TestSuggestGasPricePreAP3(t *testing.T) {
 				Data:     []byte{},
 			})
 			tx, err := types.SignTx(tx, signer, key)
-			if err != nil {
-				t.Fatalf("failed to create tx: %s", err)
-			}
+			require.NoError(t, err, "failed to create tx")
 			b.AddTx(tx)
 		}
 	})
+	defer backend.teardown()
+
 	oracle, err := NewOracle(backend, config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	_, err = oracle.SuggestPrice(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 }
 
 func TestSuggestTipCapMaxBlocksLookback(t *testing.T) {
-	txTip := big.NewInt(550 * params.GWei)
-
 	applyGasPriceTest(t, suggestTipCapTest{
 		chainConfig: params.TestChainConfig,
 		numBlocks:   20,
-		genBlock: func(i int, b *core.BlockGen) {
-			b.SetCoinbase(common.Address{1})
-
-			signer := types.LatestSigner(params.TestChainConfig)
-			baseFee := b.BaseFee()
-			feeCap := new(big.Int).Add(baseFee, txTip)
-			for j := 0; j < 370; j++ {
-				tx := types.NewTx(&types.DynamicFeeTx{
-					ChainID:   params.TestChainConfig.ChainID,
-					Nonce:     b.TxNonce(addr),
-					To:        &common.Address{},
-					Gas:       params.TxGas,
-					GasFeeCap: feeCap,
-					GasTipCap: txTip,
-					Data:      []byte{},
-				})
-				tx, err := types.SignTx(tx, signer, key)
-				if err != nil {
-					t.Fatalf("failed to create tx: %s", err)
-				}
-				b.AddTx(tx)
-			}
-		},
+		genBlock:    testGenBlock(t, 550, 370),
 		expectedTip: big.NewInt(5_807_226_110),
 	}, defaultOracleConfig())
 }
 
 func TestSuggestTipCapMaxBlocksSecondsLookback(t *testing.T) {
-	txTip := big.NewInt(550 * params.GWei)
 	applyGasPriceTest(t, suggestTipCapTest{
 		chainConfig: params.TestChainConfig,
 		numBlocks:   20,
-		genBlock: func(i int, b *core.BlockGen) {
-			b.SetCoinbase(common.Address{1})
-
-			signer := types.LatestSigner(params.TestChainConfig)
-			baseFee := b.BaseFee()
-			feeCap := new(big.Int).Add(baseFee, txTip)
-			for j := 0; j < 370; j++ {
-				tx := types.NewTx(&types.DynamicFeeTx{
-					ChainID:   params.TestChainConfig.ChainID,
-					Nonce:     b.TxNonce(addr),
-					To:        &common.Address{},
-					Gas:       params.TxGas,
-					GasFeeCap: feeCap,
-					GasTipCap: txTip,
-					Data:      []byte{},
-				})
-				tx, err := types.SignTx(tx, signer, key)
-				if err != nil {
-					t.Fatalf("failed to create tx: %s", err)
-				}
-				b.AddTx(tx)
-			}
-		},
+		genBlock:    testGenBlock(t, 550, 370),
 		expectedTip: big.NewInt(10_384_877_851),
 	}, timeCrunchOracleConfig())
 }
@@ -534,18 +393,21 @@ func TestSuggestGasPriceAfterFeeConfigUpdate(t *testing.T) {
 
 	// create a chain config with fee manager enabled at genesis with [addr] as the admin
 	chainConfig := *params.TestChainConfig
-	chainConfig.FeeManagerConfig = precompile.NewFeeManagerConfig(big.NewInt(0), []common.Address{addr}, nil, nil)
+	chainConfig.GenesisPrecompiles = params.Precompiles{
+		feemanager.ConfigKey: feemanager.NewConfig(utils.NewUint64(0), []common.Address{addr}, nil, nil, nil),
+	}
 
 	// create a fee config with higher MinBaseFee and prepare it for inclusion in a tx
 	signer := types.LatestSigner(params.TestChainConfig)
 	highFeeConfig := chainConfig.FeeConfig
 	highFeeConfig.MinBaseFee = big.NewInt(28_000_000_000)
-	data, err := precompile.PackSetFeeConfig(highFeeConfig)
+	data, err := feemanager.PackSetFeeConfig(highFeeConfig)
 	require.NoError(err)
 
 	// before issuing the block changing the fee into the chain, the fee estimation should
 	// follow the fee config in genesis.
 	backend := newTestBackend(t, &chainConfig, 0, func(i int, b *core.BlockGen) {})
+	defer backend.teardown()
 	oracle, err := NewOracle(backend, config)
 	require.NoError(err)
 	got, err := oracle.SuggestPrice(context.Background())
@@ -555,14 +417,15 @@ func TestSuggestGasPriceAfterFeeConfigUpdate(t *testing.T) {
 	// issue the block with tx that changes the fee
 	genesis := backend.chain.Genesis()
 	engine := backend.chain.Engine()
-	blocks, _, err := core.GenerateChain(&chainConfig, genesis, engine, backend.db, 1, 0, func(i int, b *core.BlockGen) {
+	db := backend.chain.StateCache().DiskDB()
+	blocks, _, err := core.GenerateChain(&chainConfig, genesis, engine, db, 1, 0, func(i int, b *core.BlockGen) {
 		b.SetCoinbase(common.Address{1})
 
 		// admin issues tx to change fee config to higher MinBaseFee
 		tx := types.NewTx(&types.DynamicFeeTx{
 			ChainID:   chainConfig.ChainID,
 			Nonce:     b.TxNonce(addr),
-			To:        &precompile.FeeConfigManagerAddress,
+			To:        &feemanager.ContractAddress,
 			Gas:       chainConfig.FeeConfig.GasLimit.Uint64(),
 			Value:     common.Big0,
 			GasFeeCap: chainConfig.FeeConfig.MinBaseFee, // give low fee, it should work since we still haven't applied high fees

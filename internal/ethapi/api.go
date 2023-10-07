@@ -28,9 +28,11 @@ package ethapi
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/ava-labs/subnet-evm/accounts"
@@ -101,8 +103,9 @@ type feeHistoryResult struct {
 	GasUsedRatio []float64        `json:"gasUsedRatio"`
 }
 
-func (s *EthereumAPI) FeeHistory(ctx context.Context, blockCount rpc.DecimalOrHex, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*feeHistoryResult, error) {
-	oldest, reward, baseFee, gasUsed, err := s.b.FeeHistory(ctx, int(blockCount), lastBlock, rewardPercentiles)
+// FeeHistory returns the fee market history.
+func (s *EthereumAPI) FeeHistory(ctx context.Context, blockCount math.HexOrDecimal64, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*feeHistoryResult, error) {
+	oldest, reward, baseFee, gasUsed, err := s.b.FeeHistory(ctx, uint64(blockCount), lastBlock, rewardPercentiles)
 	if err != nil {
 		return nil, err
 	}
@@ -137,6 +140,10 @@ func (s *EthereumAPI) Syncing() (interface{}, error) {
 	return false, nil
 }
 
+func (s *BlockChainAPI) GetChainConfig(ctx context.Context) *params.ChainConfigWithUpgradesJSON {
+	return s.b.ChainConfig().ToWithUpgradesJSON()
+}
+
 // TxPoolAPI offers and API for the transaction pool. It only operates on data that is non confidential.
 type TxPoolAPI struct {
 	b Backend
@@ -160,7 +167,7 @@ func (s *TxPoolAPI) Content() map[string]map[string]map[string]*RPCTransaction {
 	for account, txs := range pending {
 		dump := make(map[string]*RPCTransaction)
 		for _, tx := range txs {
-			dump[fmt.Sprintf("%d", tx.Nonce())] = newRPCPendingTransaction(tx, curHeader, estimatedBaseFee, s.b.ChainConfig())
+			dump[fmt.Sprintf("%d", tx.Nonce())] = NewRPCTransaction(tx, curHeader, estimatedBaseFee, s.b.ChainConfig())
 		}
 		content["pending"][account.Hex()] = dump
 	}
@@ -168,7 +175,7 @@ func (s *TxPoolAPI) Content() map[string]map[string]map[string]*RPCTransaction {
 	for account, txs := range queue {
 		dump := make(map[string]*RPCTransaction)
 		for _, tx := range txs {
-			dump[fmt.Sprintf("%d", tx.Nonce())] = newRPCPendingTransaction(tx, curHeader, estimatedBaseFee, s.b.ChainConfig())
+			dump[fmt.Sprintf("%d", tx.Nonce())] = NewRPCTransaction(tx, curHeader, estimatedBaseFee, s.b.ChainConfig())
 		}
 		content["queued"][account.Hex()] = dump
 	}
@@ -185,14 +192,14 @@ func (s *TxPoolAPI) ContentFrom(addr common.Address) map[string]map[string]*RPCT
 	// Build the pending transactions
 	dump := make(map[string]*RPCTransaction, len(pending))
 	for _, tx := range pending {
-		dump[fmt.Sprintf("%d", tx.Nonce())] = newRPCPendingTransaction(tx, curHeader, estimatedBaseFee, s.b.ChainConfig())
+		dump[fmt.Sprintf("%d", tx.Nonce())] = NewRPCTransaction(tx, curHeader, estimatedBaseFee, s.b.ChainConfig())
 	}
 	content["pending"] = dump
 
 	// Build the queued transactions
 	dump = make(map[string]*RPCTransaction, len(queue))
 	for _, tx := range queue {
-		dump[fmt.Sprintf("%d", tx.Nonce())] = newRPCPendingTransaction(tx, curHeader, estimatedBaseFee, s.b.ChainConfig())
+		dump[fmt.Sprintf("%d", tx.Nonce())] = NewRPCTransaction(tx, curHeader, estimatedBaseFee, s.b.ChainConfig())
 	}
 	content["queued"] = dump
 
@@ -218,7 +225,7 @@ func (s *TxPoolAPI) Inspect() map[string]map[string]map[string]string {
 	pending, queue := s.b.TxPoolContent()
 
 	// Define a formatter to flatten a transaction into a string
-	format := func(tx *types.Transaction) string {
+	var format = func(tx *types.Transaction) string {
 		if to := tx.To(); to != nil {
 			return fmt.Sprintf("%s: %v wei + %v gas × %v wei", tx.To().Hex(), tx.Value(), tx.Gas(), tx.GasPrice())
 		}
@@ -446,7 +453,7 @@ func (s *PersonalAccountAPI) signTransaction(ctx context.Context, args *Transact
 // passwd isn't able to decrypt the key it fails.
 func (s *PersonalAccountAPI) SendTransaction(ctx context.Context, args TransactionArgs, passwd string) (common.Hash, error) {
 	if args.Nonce == nil {
-		// Hold the addresse's mutex around signing to prevent concurrent assignment of
+		// Hold the mutex around signing to prevent concurrent assignment of
 		// the same nonce to multiple accounts.
 		s.nonceLock.LockAddr(args.from())
 		defer s.nonceLock.UnlockAddr(args.from())
@@ -610,26 +617,16 @@ func (api *BlockChainAPI) ChainId() *hexutil.Big {
 	return (*hexutil.Big)(api.b.ChainConfig().ChainID)
 }
 
-type GetChainConfigResponse struct {
-	*params.ChainConfig
-	params.UpgradeConfig `json:"upgrades"`
-}
-
-func (s *BlockChainAPI) GetChainConfig(ctx context.Context) GetChainConfigResponse {
-	config := s.b.ChainConfig()
-	resp := GetChainConfigResponse{
-		ChainConfig:   config,
-		UpgradeConfig: config.UpgradeConfig,
-	}
-	return resp
-}
-
-func (s *BlockChainAPI) GetActivePrecompilesAt(ctx context.Context, blockTimestamp *big.Int) params.PrecompileUpgrade {
+// GetActivePrecompilesAt returns the active precompile configs at the given block timestamp.
+func (s *BlockChainAPI) GetActivePrecompilesAt(ctx context.Context, blockTimestamp *uint64) params.Precompiles {
+	var timestamp uint64
 	if blockTimestamp == nil {
-		blockTimestampInt := s.b.CurrentHeader().Time
-		blockTimestamp = new(big.Int).SetUint64(blockTimestampInt)
+		timestamp = s.b.CurrentHeader().Time
+	} else {
+		timestamp = *blockTimestamp
 	}
-	return s.b.ChainConfig().GetActivePrecompiles(blockTimestamp)
+
+	return s.b.ChainConfig().EnabledStatefulPrecompiles(timestamp)
 }
 
 type FeeConfigResult struct {
@@ -698,8 +695,10 @@ func (s *BlockChainAPI) GetProof(ctx context.Context, address common.Address, st
 	if state == nil || err != nil {
 		return nil, err
 	}
-
-	storageTrie := state.StorageTrie(address)
+	storageTrie, err := state.StorageTrie(address)
+	if err != nil {
+		return nil, err
+	}
 	storageHash := types.EmptyRootHash
 	codeHash := state.GetCodeHash(address)
 	storageProof := make([]StorageResult, len(storageKeys))
@@ -713,15 +712,19 @@ func (s *BlockChainAPI) GetProof(ctx context.Context, address common.Address, st
 	}
 
 	// create the proof for the storageKeys
-	for i, key := range storageKeys {
+	for i, hexKey := range storageKeys {
+		key, err := decodeHash(hexKey)
+		if err != nil {
+			return nil, err
+		}
 		if storageTrie != nil {
-			proof, storageError := state.GetStorageProof(address, common.HexToHash(key))
+			proof, storageError := state.GetStorageProof(address, key)
 			if storageError != nil {
 				return nil, storageError
 			}
-			storageProof[i] = StorageResult{key, (*hexutil.Big)(state.GetState(address, common.HexToHash(key)).Big()), toHexSlice(proof)}
+			storageProof[i] = StorageResult{hexKey, (*hexutil.Big)(state.GetState(address, key).Big()), toHexSlice(proof)}
 		} else {
-			storageProof[i] = StorageResult{key, &hexutil.Big{}, []string{}}
+			storageProof[i] = StorageResult{hexKey, &hexutil.Big{}, []string{}}
 		}
 	}
 
@@ -740,6 +743,25 @@ func (s *BlockChainAPI) GetProof(ctx context.Context, address common.Address, st
 		StorageHash:  storageHash,
 		StorageProof: storageProof,
 	}, state.Error()
+}
+
+// decodeHash parses a hex-encoded 32-byte hash. The input may optionally
+// be prefixed by 0x and can have an byte length up to 32.
+func decodeHash(s string) (common.Hash, error) {
+	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+		s = s[2:]
+	}
+	if (len(s) & 1) > 0 {
+		s = "0" + s
+	}
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("hex string invalid")
+	}
+	if len(b) > 32 {
+		return common.Hash{}, fmt.Errorf("hex string too long, want at most 32 bytes")
+	}
+	return common.BytesToHash(b), nil
 }
 
 // GetHeaderByNumber returns the requested canonical block header.
@@ -862,12 +884,16 @@ func (s *BlockChainAPI) GetCode(ctx context.Context, address common.Address, blo
 // GetStorageAt returns the storage from the state at the given address, key and
 // block number. The rpc.LatestBlockNumber and rpc.PendingBlockNumber meta block
 // numbers are also allowed.
-func (s *BlockChainAPI) GetStorageAt(ctx context.Context, address common.Address, key string, blockNrOrHash rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
+func (s *BlockChainAPI) GetStorageAt(ctx context.Context, address common.Address, hexKey string, blockNrOrHash rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
 	state, _, err := s.b.StateAndHeaderByNumberOrHash(ctx, blockNrOrHash)
 	if state == nil || err != nil {
 		return nil, err
 	}
-	res := state.GetState(address, common.HexToHash(key))
+	key, err := decodeHash(hexKey)
+	if err != nil {
+		return nil, fmt.Errorf("unable to decode storage key: %s", err)
+	}
+	res := state.GetState(address, key)
 	return res[:], state.Error()
 }
 
@@ -920,6 +946,10 @@ func (diff *StateOverride) Apply(state *state.StateDB) error {
 			}
 		}
 	}
+	// Now finalize the changes. Finalize is normally performed between transactions.
+	// By using finalize, the overrides are semantically behaving as
+	// if they were created in a transaction just before the tracing occur.
+	state.Finalise(false)
 	return nil
 }
 
@@ -927,7 +957,7 @@ func (diff *StateOverride) Apply(state *state.StateDB) error {
 type BlockOverrides struct {
 	Number     *hexutil.Big
 	Difficulty *hexutil.Big
-	Time       *hexutil.Big
+	Time       *hexutil.Uint64
 	GasLimit   *hexutil.Uint64
 	Coinbase   *common.Address
 	BaseFee    *hexutil.Big
@@ -945,7 +975,7 @@ func (diff *BlockOverrides) Apply(blockCtx *vm.BlockContext) {
 		blockCtx.Difficulty = diff.Difficulty.ToInt()
 	}
 	if diff.Time != nil {
-		blockCtx.Time = diff.Time.ToInt()
+		blockCtx.Time = uint64(*diff.Time)
 	}
 	if diff.GasLimit != nil {
 		blockCtx.GasLimit = uint64(*diff.GasLimit)
@@ -1026,7 +1056,7 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 		return nil, fmt.Errorf("execution aborted (timeout = %v)", timeout)
 	}
 	if err != nil {
-		return result, fmt.Errorf("err: %w (supplied gas %d)", err, msg.Gas())
+		return result, fmt.Errorf("err: %w (supplied gas %d)", err, msg.GasLimit)
 	}
 	return result, nil
 }
@@ -1043,7 +1073,7 @@ func newRevertError(result *core.ExecutionResult) *revertError {
 	}
 }
 
-// revertError is an API error that encompassas an EVM revertal with JSON error
+// revertError is an API error that encompasses an EVM revertal with JSON error
 // code and a binary data blob.
 type revertError struct {
 	error
@@ -1158,7 +1188,7 @@ func DoEstimateGas(ctx context.Context, b Backend, args TransactionArgs, blockNr
 		available := new(big.Int).Set(balance)
 		if args.Value != nil {
 			if args.Value.ToInt().Cmp(available) >= 0 {
-				return 0, errors.New("insufficient funds for transfer")
+				return 0, core.ErrInsufficientFundsForTransfer
 			}
 			available.Sub(available, args.Value.ToInt())
 		}
@@ -1170,14 +1200,14 @@ func DoEstimateGas(ctx context.Context, b Backend, args TransactionArgs, blockNr
 			if transfer == nil {
 				transfer = new(hexutil.Big)
 			}
-			log.Warn("Gas estimation capped by limited funds", "original", hi, "balance", balance,
+			log.Info("Gas estimation capped by limited funds", "original", hi, "balance", balance,
 				"sent", transfer.ToInt(), "maxFeePerGas", feeCap, "fundable", allowance)
 			hi = allowance.Uint64()
 		}
 	}
 	// Recap the highest gas allowance with specified gascap.
 	if gasCap != 0 && hi > gasCap {
-		log.Warn("Caller gas above allowance, capping", "requested", hi, "cap", gasCap)
+		log.Info("Caller gas above allowance, capping", "requested", hi, "cap", gasCap)
 		hi = gasCap
 	}
 	cap = hi
@@ -1199,6 +1229,7 @@ func DoEstimateGas(ctx context.Context, b Backend, args TransactionArgs, blockNr
 	for lo+1 < hi {
 		mid := (hi + lo) / 2
 		failed, _, err := executable(mid)
+
 		// If the error is not nil(consensus error), it means the provided message
 		// call or transaction will never be accepted no matter how much gas it is
 		// assigned. Return the error directly, don't struggle any more.
@@ -1360,7 +1391,7 @@ type RPCTransaction struct {
 // newRPCTransaction returns a transaction that will serialize to the RPC
 // representation, with the given location metadata set (if available).
 func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber uint64, blockTimestamp uint64, index uint64, baseFee *big.Int, config *params.ChainConfig) *RPCTransaction {
-	signer := types.MakeSigner(config, new(big.Int).SetUint64(blockNumber), new(big.Int).SetUint64(blockTimestamp))
+	signer := types.MakeSigner(config, new(big.Int).SetUint64(blockNumber), blockTimestamp)
 	from, _ := types.Sender(signer, tx)
 	v, r, s := tx.RawSignatureValues()
 	result := &RPCTransaction{
@@ -1410,8 +1441,10 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 	return result
 }
 
-// newRPCPendingTransaction returns a pending transaction that will serialize to the RPC representation
-func newRPCPendingTransaction(tx *types.Transaction, current *types.Header, baseFee *big.Int, config *params.ChainConfig) *RPCTransaction {
+// NewRPCTransaction returns a pending transaction that will serialize to the RPC representation
+// Note: in go-ethereum this function is called NewRPCPendingTransaction.
+// In subnet-evm, we have renamed it to NewRPCTransaction as it is used for accepted transactions as well.
+func NewRPCTransaction(tx *types.Transaction, current *types.Header, baseFee *big.Int, config *params.ChainConfig) *RPCTransaction {
 	blockNumber := uint64(0)
 	blockTimestamp := uint64(0)
 	if current != nil {
@@ -1486,9 +1519,11 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 	if db == nil || err != nil {
 		return nil, 0, nil, err
 	}
-	// If the gas amount is not set, extract this as it will depend on access
-	// lists and we'll need to reestimate every time
-	nogas := args.Gas == nil
+	// If the gas amount is not set, default to RPC gas cap.
+	if args.Gas == nil {
+		tmp := hexutil.Uint64(b.RPCGasCap())
+		args.Gas = &tmp
+	}
 
 	// Ensure any missing fields are filled, extract the recipient and input data
 	if err := args.setDefaults(ctx, b); err != nil {
@@ -1501,7 +1536,7 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		to = crypto.CreateAddress(args.from(), uint64(*args.Nonce))
 	}
 	// Retrieve the precompiles since they don't need to be added to the access list
-	precompiles := vm.ActivePrecompiles(b.ChainConfig().AvalancheRules(header.Number, new(big.Int).SetUint64(header.Time)))
+	precompiles := vm.ActivePrecompiles(b.ChainConfig().AvalancheRules(header.Number, header.Time))
 
 	// Create an initial tracer
 	prevTracer := logger.NewAccessListTracer(nil, args.from(), to, precompiles)
@@ -1513,15 +1548,6 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		accessList := prevTracer.AccessList()
 		log.Trace("Creating access list", "input", accessList)
 
-		// If no gas amount was specified, each unique access list needs it's own
-		// gas calculation. This is quite expensive, but we need to be accurate
-		// and it's convered by the sender only anyway.
-		if nogas {
-			args.Gas = nil
-			if err := args.setDefaults(ctx, b); err != nil {
-				return nil, 0, nil, err // shouldn't happen, just in case
-			}
-		}
 		// Copy the original db so we don't modify it
 		statedb := db.Copy()
 		// Set the access list tracer to the last al
@@ -1539,7 +1565,7 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		if err != nil {
 			return nil, 0, nil, err
 		}
-		res, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.Gas()))
+		res, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.GasLimit))
 		if err != nil {
 			return nil, 0, nil, fmt.Errorf("failed to apply transaction: %v err: %v", args.toTransaction().Hash(), err)
 		}
@@ -1548,6 +1574,49 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		}
 		prevTracer = tracer
 	}
+}
+
+// Note: this API is moved directly from ./eth/api.go to ensure that it is available under an API that is enabled by
+// default without duplicating the code and serving the same API in the original location as well without creating a
+// cyclic import.
+//
+// BadBlockArgs represents the entries in the list returned when bad blocks are queried.
+type BadBlockArgs struct {
+	Hash   common.Hash            `json:"hash"`
+	Block  map[string]interface{} `json:"block"`
+	RLP    string                 `json:"rlp"`
+	Reason *core.BadBlockReason   `json:"reason"`
+}
+
+// GetBadBlocks returns a list of the last 'bad blocks' that the client has seen on the network
+// and returns them as a JSON list of block hashes.
+func (s *BlockChainAPI) GetBadBlocks(ctx context.Context) ([]*BadBlockArgs, error) {
+	var (
+		err                error
+		badBlocks, reasons = s.b.BadBlocks()
+		results            = make([]*BadBlockArgs, 0, len(badBlocks))
+	)
+	for i, block := range badBlocks {
+		var (
+			blockRlp  string
+			blockJSON map[string]interface{}
+		)
+		if rlpBytes, err := rlp.EncodeToBytes(block); err != nil {
+			blockRlp = err.Error() // Hacky, but hey, it works
+		} else {
+			blockRlp = fmt.Sprintf("%#x", rlpBytes)
+		}
+		if blockJSON, err = RPCMarshalBlock(block, true, true, s.b.ChainConfig()); err != nil {
+			blockJSON = map[string]interface{}{"error": err.Error()}
+		}
+		results = append(results, &BadBlockArgs{
+			Hash:   block.Hash(),
+			RLP:    blockRlp,
+			Block:  blockJSON,
+			Reason: reasons[i],
+		})
+	}
+	return results, nil
 }
 
 // TransactionAPI exposes methods for reading and creating transaction data.
@@ -1651,7 +1720,7 @@ func (s *TransactionAPI) GetTransactionByHash(ctx context.Context, hash common.H
 	// No finalized transaction, try to retrieve it from the pool
 	if tx := s.b.GetPoolTransaction(hash); tx != nil {
 		estimatedBaseFee, _ := s.b.EstimateBaseFee(ctx)
-		return newRPCPendingTransaction(tx, s.b.CurrentHeader(), estimatedBaseFee, s.b.ChainConfig()), nil
+		return NewRPCTransaction(tx, s.b.CurrentHeader(), estimatedBaseFee, s.b.ChainConfig()), nil
 	}
 
 	// Transaction unknown, return as such
@@ -1687,6 +1756,7 @@ func (s *TransactionAPI) GetTransactionReceipt(ctx context.Context, hash common.
 	if err != nil {
 		return nil, err
 	}
+
 	receipts, err := s.b.GetReceipts(ctx, blockHash)
 	if err != nil {
 		return nil, err
@@ -1698,8 +1768,7 @@ func (s *TransactionAPI) GetTransactionReceipt(ctx context.Context, hash common.
 
 	// Derive the sender.
 	bigblock := new(big.Int).SetUint64(blockNumber)
-	timestamp := new(big.Int).SetUint64(header.Time)
-	signer := types.MakeSigner(s.b.ChainConfig(), bigblock, timestamp)
+	signer := types.MakeSigner(s.b.ChainConfig(), bigblock, header.Time)
 	from, _ := types.Sender(signer, tx)
 
 	fields := map[string]interface{}{
@@ -1715,13 +1784,7 @@ func (s *TransactionAPI) GetTransactionReceipt(ctx context.Context, hash common.
 		"logs":              receipt.Logs,
 		"logsBloom":         receipt.Bloom,
 		"type":              hexutil.Uint(tx.Type()),
-	}
-	// Assign the effective gas price paid
-	if !s.b.ChainConfig().IsSubnetEVM(timestamp) {
-		fields["effectiveGasPrice"] = hexutil.Uint64(tx.GasPrice().Uint64())
-	} else {
-		gasPrice := new(big.Int).Add(header.BaseFee, tx.EffectiveGasTipValue(header.BaseFee))
-		fields["effectiveGasPrice"] = hexutil.Uint64(gasPrice.Uint64())
+		"effectiveGasPrice": (*hexutil.Big)(receipt.EffectiveGasPrice),
 	}
 	// Assign receipt status or post state.
 	if len(receipt.PostState) > 0 {
@@ -1732,6 +1795,7 @@ func (s *TransactionAPI) GetTransactionReceipt(ctx context.Context, hash common.
 	if receipt.Logs == nil {
 		fields["logs"] = []*types.Log{}
 	}
+
 	// If the ContractAddress is 20 0x0 bytes, assume it is not a contract creation
 	if receipt.ContractAddress != (common.Address{}) {
 		fields["contractAddress"] = receipt.ContractAddress
@@ -1759,7 +1823,7 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 	if err := checkTxFee(tx.GasPrice(), tx.Gas(), b.RPCTxFeeCap()); err != nil {
 		return common.Hash{}, err
 	}
-	if !b.UnprotectedAllowed() && !tx.Protected() {
+	if !b.UnprotectedAllowed(tx) && !tx.Protected() {
 		// Ensure only eip155 signed transactions are submitted if EIP155Required is set.
 		return common.Hash{}, errors.New("only replay-protected (EIP-155) transactions allowed over RPC")
 	}
@@ -1768,7 +1832,7 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 	}
 	// Print a log with full tx details for manual investigations and interventions
 	currentBlock := b.CurrentBlock()
-	signer := types.MakeSigner(b.ChainConfig(), currentBlock.Number(), new(big.Int).SetUint64(currentBlock.Time()))
+	signer := types.MakeSigner(b.ChainConfig(), currentBlock.Number, currentBlock.Time)
 	from, err := types.Sender(signer, tx)
 	if err != nil {
 		return common.Hash{}, err
@@ -1795,7 +1859,7 @@ func (s *TransactionAPI) SendTransaction(ctx context.Context, args TransactionAr
 	}
 
 	if args.Nonce == nil {
-		// Hold the addresse's mutex around signing to prevent concurrent assignment of
+		// Hold the mutex around signing to prevent concurrent assignment of
 		// the same nonce to multiple accounts.
 		s.nonceLock.LockAddr(args.from())
 		defer s.nonceLock.UnlockAddr(args.from())
@@ -1924,7 +1988,7 @@ func (s *TransactionAPI) PendingTransactions() ([]*RPCTransaction, error) {
 		from, _ := types.Sender(s.signer, tx)
 		if _, exists := accounts[from]; exists {
 			estimatedBaseFee, _ := s.b.EstimateBaseFee(context.Background())
-			transactions = append(transactions, newRPCPendingTransaction(tx, curHeader, estimatedBaseFee, s.b.ChainConfig()))
+			transactions = append(transactions, NewRPCTransaction(tx, curHeader, estimatedBaseFee, s.b.ChainConfig()))
 		}
 	}
 	return transactions, nil
@@ -1942,11 +2006,11 @@ func (s *TransactionAPI) Resend(ctx context.Context, sendArgs TransactionArgs, g
 	matchTx := sendArgs.toTransaction()
 
 	// Before replacing the old transaction, ensure the _new_ transaction fee is reasonable.
-	price := matchTx.GasPrice()
+	var price = matchTx.GasPrice()
 	if gasPrice != nil {
 		price = gasPrice.ToInt()
 	}
-	gas := matchTx.Gas()
+	var gas = matchTx.Gas()
 	if gasLimit != nil {
 		gas = uint64(*gasLimit)
 	}
@@ -1993,25 +2057,45 @@ func NewDebugAPI(b Backend) *DebugAPI {
 	return &DebugAPI{b: b}
 }
 
-// GetHeaderRlp retrieves the RLP encoded for of a single header.
-func (api *DebugAPI) GetHeaderRlp(ctx context.Context, number uint64) (hexutil.Bytes, error) {
-	header, _ := api.b.HeaderByNumber(ctx, rpc.BlockNumber(number))
+// GetRawHeader retrieves the RLP encoding for a single header.
+func (api *DebugAPI) GetRawHeader(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
+	var hash common.Hash
+	if h, ok := blockNrOrHash.Hash(); ok {
+		hash = h
+	} else {
+		block, err := api.b.BlockByNumberOrHash(ctx, blockNrOrHash)
+		if err != nil {
+			return nil, err
+		}
+		hash = block.Hash()
+	}
+	header, _ := api.b.HeaderByHash(ctx, hash)
 	if header == nil {
-		return nil, fmt.Errorf("header #%d not found", number)
+		return nil, fmt.Errorf("header #%d not found", hash)
 	}
 	return rlp.EncodeToBytes(header)
 }
 
-// GetBlockRlp retrieves the RLP encoded for of a single block.
-func (api *DebugAPI) GetBlockRlp(ctx context.Context, number uint64) (hexutil.Bytes, error) {
-	block, _ := api.b.BlockByNumber(ctx, rpc.BlockNumber(number))
+// GetRawBlock retrieves the RLP encoded for a single block.
+func (api *DebugAPI) GetRawBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
+	var hash common.Hash
+	if h, ok := blockNrOrHash.Hash(); ok {
+		hash = h
+	} else {
+		block, err := api.b.BlockByNumberOrHash(ctx, blockNrOrHash)
+		if err != nil {
+			return nil, err
+		}
+		hash = block.Hash()
+	}
+	block, _ := api.b.BlockByHash(ctx, hash)
 	if block == nil {
-		return nil, fmt.Errorf("block #%d not found", number)
+		return nil, fmt.Errorf("block #%d not found", hash)
 	}
 	return rlp.EncodeToBytes(block)
 }
 
-// GetRawReceipts retrieves the binary-encoded raw receipts of a single block.
+// GetRawReceipts retrieves the binary-encoded receipts of a single block.
 func (api *DebugAPI) GetRawReceipts(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) ([]hexutil.Bytes, error) {
 	var hash common.Hash
 	if h, ok := blockNrOrHash.Hash(); ok {
@@ -2036,6 +2120,22 @@ func (api *DebugAPI) GetRawReceipts(ctx context.Context, blockNrOrHash rpc.Block
 		result[i] = b
 	}
 	return result, nil
+}
+
+// GetRawTransaction returns the bytes of the transaction for the given hash.
+func (s *DebugAPI) GetRawTransaction(ctx context.Context, hash common.Hash) (hexutil.Bytes, error) {
+	// Retrieve a finalized transaction, or a pooled otherwise
+	tx, _, _, _, err := s.b.GetTransaction(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if tx == nil {
+		if tx = s.b.GetPoolTransaction(hash); tx == nil {
+			// Transaction not found anywhere, abort
+			return nil, nil
+		}
+	}
+	return tx.MarshalBinary()
 }
 
 // PrintBlock retrieves a block and returns its pretty printed form.

@@ -9,7 +9,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/ava-labs/subnet-evm/constants"
 	"github.com/ava-labs/subnet-evm/core/types"
 	"github.com/ava-labs/subnet-evm/params"
 	"github.com/ava-labs/subnet-evm/trie"
@@ -58,20 +57,26 @@ func (v blockValidator) SyntacticVerify(b *Block, rules params.Rules) error {
 		return fmt.Errorf("invalid mix digest: %v", ethHeader.MixDigest)
 	}
 
-	if rules.IsSubnetEVM {
-		expectedExtraDataSize := params.ExtraDataSize
-		if headerExtraDataSize := len(ethHeader.Extra); headerExtraDataSize != expectedExtraDataSize {
+	switch {
+	case rules.IsDUpgrade:
+		if len(ethHeader.Extra) < params.DynamicFeeExtraDataSize {
 			return fmt.Errorf(
-				"expected header ExtraData to be %d but got %d",
-				expectedExtraDataSize, headerExtraDataSize,
+				"expected header ExtraData to be len >= %d but got %d",
+				params.DynamicFeeExtraDataSize, len(ethHeader.Extra),
 			)
 		}
-	} else {
-		headerExtraDataSize := uint64(len(ethHeader.Extra))
-		if headerExtraDataSize > params.MaximumExtraDataSize {
+	case rules.IsSubnetEVM:
+		if len(ethHeader.Extra) != params.DynamicFeeExtraDataSize {
+			return fmt.Errorf(
+				"expected header ExtraData to be len %d but got %d",
+				params.DynamicFeeExtraDataSize, len(ethHeader.Extra),
+			)
+		}
+	default:
+		if len(ethHeader.Extra) > int(params.MaximumExtraDataSize) {
 			return fmt.Errorf(
 				"expected header ExtraData to be <= %d but got %d",
-				params.MaximumExtraDataSize, headerExtraDataSize,
+				params.MaximumExtraDataSize, len(ethHeader.Extra),
 			)
 		}
 	}
@@ -95,10 +100,7 @@ func (v blockValidator) SyntacticVerify(b *Block, rules params.Rules) error {
 	if uncleHash != ethHeader.UncleHash {
 		return fmt.Errorf("invalid uncle hash %v does not match calculated uncle hash %v", ethHeader.UncleHash, uncleHash)
 	}
-	// Coinbase must be zero, if AllowFeeRecipients is not enabled and not SubnetEVM
-	if !(rules.IsSubnetEVM && b.vm.chainConfig.AllowFeeRecipients) && b.ethBlock.Coinbase() != constants.BlackholeAddr {
-		return fmt.Errorf("invalid coinbase %v does not match required blackhole address %v", ethHeader.Coinbase, constants.BlackholeAddr)
-	}
+
 	// Block must not have any uncles
 	if len(b.ethBlock.Uncles()) > 0 {
 		return errUnclesUnsupported

@@ -278,7 +278,6 @@ func testLongDeepRepair(t *testing.T, snapshots bool) {
 func TestLongOldForkedShallowRepair(t *testing.T) {
 	testLongOldForkedShallowRepair(t, false)
 }
-
 func TestLongOldForkedShallowRepairWithSnapshots(t *testing.T) {
 	testLongOldForkedShallowRepair(t, true)
 }
@@ -357,7 +356,6 @@ func testLongOldForkedDeepRepair(t *testing.T, snapshots bool) {
 func TestLongNewerForkedShallowRepair(t *testing.T) {
 	testLongNewerForkedShallowRepair(t, false)
 }
-
 func TestLongNewerForkedShallowRepairWithSnapshots(t *testing.T) {
 	testLongNewerForkedShallowRepair(t, true)
 }
@@ -504,13 +502,15 @@ func testLongReorgedDeepRepair(t *testing.T, snapshots bool) {
 
 func testRepair(t *testing.T, tt *rewindTest, snapshots bool) {
 	// It's hard to follow the test case, visualize the input
-	// log.Root().SetHandler(log.LvlFilterHandler(log.LvlTrace, log.StreamHandler(os.Stderr, log.TerminalFormat(true))))
+	//log.Root().SetHandler(log.LvlFilterHandler(log.LvlTrace, log.StreamHandler(os.Stderr, log.TerminalFormat(true))))
 	// fmt.Println(tt.dump(true))
 
 	// Create a temporary persistent database
 	datadir := t.TempDir()
 
-	db, err := rawdb.NewLevelDBDatabase(datadir, 0, 0, "", false)
+	db, err := rawdb.Open(rawdb.OpenOptions{
+		Directory: datadir,
+	})
 	if err != nil {
 		t.Fatalf("Failed to create persistent database: %v", err)
 	}
@@ -518,9 +518,12 @@ func testRepair(t *testing.T, tt *rewindTest, snapshots bool) {
 
 	// Initialize a fresh chain
 	var (
-		genesis = (&Genesis{Config: params.TestChainConfig, BaseFee: big.NewInt(params.TestInitialBaseFee)}).MustCommit(db)
-		engine  = dummy.NewFullFaker()
-		config  = &CacheConfig{
+		gspec = &Genesis{
+			BaseFee: big.NewInt(params.TestInitialBaseFee),
+			Config:  params.TestChainConfig,
+		}
+		engine = dummy.NewFullFaker()
+		config = &CacheConfig{
 			TrieCleanLimit: 256,
 			TrieDirtyLimit: 256,
 			SnapshotLimit:  0, // Disable snapshot by default
@@ -530,7 +533,7 @@ func testRepair(t *testing.T, tt *rewindTest, snapshots bool) {
 	if snapshots {
 		config.SnapshotLimit = 256
 	}
-	chain, err := NewBlockChain(db, config, params.TestChainConfig, engine, vm.Config{}, common.Hash{})
+	chain, err := NewBlockChain(db, config, gspec, engine, vm.Config{}, common.Hash{}, false)
 	if err != nil {
 		t.Fatalf("Failed to create chain: %v", err)
 	}
@@ -539,14 +542,14 @@ func testRepair(t *testing.T, tt *rewindTest, snapshots bool) {
 	// If sidechain blocks are needed, make a light chain and import it
 	var sideblocks types.Blocks
 	if tt.sidechainBlocks > 0 {
-		sideblocks, _, _ = GenerateChain(params.TestChainConfig, genesis, engine, rawdb.NewMemoryDatabase(), tt.sidechainBlocks, 10, func(i int, b *BlockGen) {
+		sideblocks, _, _ = GenerateChain(gspec.Config, gspec.ToBlock(), engine, rawdb.NewMemoryDatabase(), tt.sidechainBlocks, 10, func(i int, b *BlockGen) {
 			b.SetCoinbase(common.Address{0x01})
 		})
 		if _, err := chain.InsertChain(sideblocks); err != nil {
 			t.Fatalf("Failed to import side chain: %v", err)
 		}
 	}
-	canonblocks, _, _ := GenerateChain(params.TestChainConfig, genesis, engine, rawdb.NewMemoryDatabase(), tt.canonicalBlocks, 10, func(i int, b *BlockGen) {
+	canonblocks, _, _ := GenerateChain(gspec.Config, gspec.ToBlock(), engine, rawdb.NewMemoryDatabase(), tt.canonicalBlocks, 10, func(i int, b *BlockGen) {
 		b.SetCoinbase(common.Address{0x02})
 		b.SetDifficulty(big.NewInt(1000000))
 	})
@@ -570,15 +573,18 @@ func testRepair(t *testing.T, tt *rewindTest, snapshots bool) {
 
 	// Pull the plug on the database, simulating a hard crash
 	db.Close()
+	chain.stopWithoutSaving()
 
 	// Start a new blockchain back up and see where the repair leads us
-	db, err = rawdb.NewLevelDBDatabase(datadir, 0, 0, "", false)
+	db, err = rawdb.Open(rawdb.OpenOptions{
+		Directory: datadir,
+	})
 	if err != nil {
 		t.Fatalf("Failed to reopen persistent database: %v", err)
 	}
 	defer db.Close()
 
-	newChain, err := NewBlockChain(db, config, params.TestChainConfig, engine, vm.Config{}, lastAcceptedHash)
+	newChain, err := NewBlockChain(db, config, gspec, engine, vm.Config{}, lastAcceptedHash, false)
 	if err != nil {
 		t.Fatalf("Failed to recreate chain: %v", err)
 	}
@@ -593,7 +599,7 @@ func testRepair(t *testing.T, tt *rewindTest, snapshots bool) {
 	if head := newChain.CurrentHeader(); head.Number.Uint64() != tt.expHeadBlock {
 		t.Errorf("Head header mismatch: have %d, want %d", head.Number, tt.expHeadBlock)
 	}
-	if head := newChain.CurrentBlock(); head.NumberU64() != tt.expHeadBlock {
-		t.Errorf("Head block mismatch: have %d, want %d", head.NumberU64(), tt.expHeadBlock)
+	if head := newChain.CurrentBlock(); head.Number.Uint64() != tt.expHeadBlock {
+		t.Errorf("Head block mismatch: have %d, want %d", head.Number, tt.expHeadBlock)
 	}
 }

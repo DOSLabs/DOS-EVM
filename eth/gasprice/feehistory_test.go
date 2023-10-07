@@ -34,6 +34,7 @@ import (
 
 	"github.com/ava-labs/subnet-evm/core"
 	"github.com/ava-labs/subnet-evm/core/types"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ava-labs/subnet-evm/params"
 	"github.com/ava-labs/subnet-evm/rpc"
@@ -41,11 +42,11 @@ import (
 )
 
 func TestFeeHistory(t *testing.T) {
-	cases := []struct {
+	var cases = []struct {
 		pending      bool
-		maxCallBlock int
+		maxCallBlock uint64
 		maxBlock     int
-		count        int
+		count        uint64
 		last         rpc.BlockNumber
 		percent      []float64
 		expFirst     uint64
@@ -106,12 +107,10 @@ func TestFeeHistory(t *testing.T) {
 			b.AddTx(tx)
 		})
 		oracle, err := NewOracle(backend, config)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		first, reward, baseFee, ratio, err := oracle.FeeHistory(context.Background(), c.count, c.last, c.percent)
-
+		backend.teardown()
 		expReward := c.expCount
 		if len(c.percent) == 0 {
 			expReward = 0

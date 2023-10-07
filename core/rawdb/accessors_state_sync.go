@@ -4,6 +4,9 @@
 package rawdb
 
 import (
+	"encoding/binary"
+
+	"github.com/ava-labs/avalanchego/utils/wrappers"
 	"github.com/ava-labs/subnet-evm/ethdb"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
@@ -83,13 +86,12 @@ func ClearSyncSegments(db ethdb.KeyValueStore, root common.Hash) error {
 	segmentsPrefix := make([]byte, len(syncSegmentsPrefix)+common.HashLength)
 	copy(segmentsPrefix, syncSegmentsPrefix)
 	copy(segmentsPrefix[len(syncSegmentsPrefix):], root[:])
-
-	return ClearPrefix(db, segmentsPrefix)
+	return ClearPrefix(db, segmentsPrefix, syncSegmentsKeyLength)
 }
 
 // ClearAllSyncSegments removes all segment markers from db
 func ClearAllSyncSegments(db ethdb.KeyValueStore) error {
-	return ClearPrefix(db, syncSegmentsPrefix)
+	return ClearPrefix(db, syncSegmentsPrefix, syncSegmentsKeyLength)
 }
 
 // UnpackSyncSegmentKey returns the root and start position for a trie segment
@@ -128,12 +130,12 @@ func ClearSyncStorageTrie(db ethdb.KeyValueStore, root common.Hash) error {
 	accountsPrefix := make([]byte, len(syncStorageTriesPrefix)+common.HashLength)
 	copy(accountsPrefix, syncStorageTriesPrefix)
 	copy(accountsPrefix[len(syncStorageTriesPrefix):], root[:])
-	return ClearPrefix(db, accountsPrefix)
+	return ClearPrefix(db, accountsPrefix, syncStorageTriesKeyLength)
 }
 
 // ClearAllSyncStorageTries removes all storage tries added for syncing from db
 func ClearAllSyncStorageTries(db ethdb.KeyValueStore) error {
-	return ClearPrefix(db, syncStorageTriesPrefix)
+	return ClearPrefix(db, syncStorageTriesPrefix, syncStorageTriesKeyLength)
 }
 
 // UnpackSyncStorageTrieKey returns the root and account for a storage trie
@@ -152,4 +154,25 @@ func packSyncStorageTrieKey(root common.Hash, account common.Hash) []byte {
 	bytes = append(bytes, root[:]...)
 	bytes = append(bytes, account[:]...)
 	return bytes
+}
+
+// WriteSyncPerformed logs an entry in [db] indicating the VM state synced to [blockNumber].
+func WriteSyncPerformed(db ethdb.KeyValueWriter, blockNumber uint64) error {
+	syncPerformedPrefixLen := len(syncPerformedPrefix)
+	bytes := make([]byte, syncPerformedPrefixLen+wrappers.LongLen)
+	copy(bytes[:syncPerformedPrefixLen], syncPerformedPrefix)
+	binary.BigEndian.PutUint64(bytes[syncPerformedPrefixLen:], blockNumber)
+	return db.Put(bytes, []byte{0x01})
+}
+
+// NewSyncPerformedIterator returns an iterator over all block numbers the VM
+// has state synced to.
+func NewSyncPerformedIterator(db ethdb.Iteratee) ethdb.Iterator {
+	return NewKeyLengthIterator(db.NewIterator(syncPerformedPrefix, nil), syncPerformedKeyLength)
+}
+
+// UnpackSyncPerformedKey returns the block number from keys the iterator returned
+// from NewSyncPerformedIterator.
+func UnpackSyncPerformedKey(key []byte) uint64 {
+	return binary.BigEndian.Uint64(key[len(syncPerformedPrefix):])
 }

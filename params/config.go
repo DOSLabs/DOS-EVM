@@ -32,11 +32,15 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/subnet-evm/commontype"
-	"github.com/ava-labs/subnet-evm/precompile"
+	"github.com/ava-labs/subnet-evm/precompile/modules"
+	"github.com/ava-labs/subnet-evm/precompile/precompileconfig"
 	"github.com/ava-labs/subnet-evm/utils"
 	"github.com/ethereum/go-ethereum/common"
 )
+
+const maxJSONLen = 64 * 1024 * 1024 // 64MB
 
 var (
 	errNonGenesisForkByHeight = errors.New("subnet-evm only supports forking by height at the genesis block")
@@ -46,10 +50,10 @@ var (
 	// For legacy tests
 	MinGasPrice        int64 = 225_000_000_000
 	TestInitialBaseFee int64 = 225_000_000_000
-	TestMaxBaseFee           = big.NewInt(225_000_000_000)
+	TestMaxBaseFee     int64 = 225_000_000_000
 
-	ExtraDataSize        = 80
-	RollupWindow  uint64 = 10
+	DynamicFeeExtraDataSize        = 80
+	RollupWindow            uint64 = 10
 
 	DefaultFeeConfig = commontype.FeeConfig{
 		GasLimit:        big.NewInt(8_000_000),
@@ -66,15 +70,35 @@ var (
 )
 
 var (
-	// SubnetEVMDefaultChainConfig is the default configuration
+	// SubnetEVMDefaultConfig is the default configuration
+	// without any network upgrades.
 	SubnetEVMDefaultChainConfig = &ChainConfig{
 		ChainID:            SubnetEVMChainID,
 		FeeConfig:          DefaultFeeConfig,
 		AllowFeeRecipients: false,
 
+		HomesteadBlock:           big.NewInt(0),
+		EIP150Block:              big.NewInt(0),
+		EIP150Hash:               common.HexToHash("0x2086799aeebeae135c246c65021c82b4e15a2c451340993aacfd2751886514f0"),
+		EIP155Block:              big.NewInt(0),
+		EIP158Block:              big.NewInt(0),
+		ByzantiumBlock:           big.NewInt(0),
+		ConstantinopleBlock:      big.NewInt(0),
+		PetersburgBlock:          big.NewInt(0),
+		IstanbulBlock:            big.NewInt(0),
+		MuirGlacierBlock:         big.NewInt(0),
+		MandatoryNetworkUpgrades: MainnetNetworkUpgrades, // This can be changed to correct network (local, test) via VM.
+		GenesisPrecompiles:       Precompiles{},
+	}
+
+	TestChainConfig = &ChainConfig{
+		AvalancheContext:    AvalancheContext{snow.DefaultContextTest()},
+		ChainID:             big.NewInt(1),
+		FeeConfig:           DefaultFeeConfig,
+		AllowFeeRecipients:  false,
 		HomesteadBlock:      big.NewInt(0),
 		EIP150Block:         big.NewInt(0),
-		EIP150Hash:          common.HexToHash("0x2086799aeebeae135c246c65021c82b4e15a2c451340993aacfd2751886514f0"),
+		EIP150Hash:          common.Hash{},
 		EIP155Block:         big.NewInt(0),
 		EIP158Block:         big.NewInt(0),
 		ByzantiumBlock:      big.NewInt(0),
@@ -82,15 +106,79 @@ var (
 		PetersburgBlock:     big.NewInt(0),
 		IstanbulBlock:       big.NewInt(0),
 		MuirGlacierBlock:    big.NewInt(0),
-
-		NetworkUpgrades: NetworkUpgrades{
-			SubnetEVMTimestamp: big.NewInt(0),
+		MandatoryNetworkUpgrades: MandatoryNetworkUpgrades{
+			SubnetEVMTimestamp: utils.NewUint64(0),
+			DUpgradeTimestamp:  utils.NewUint64(0),
 		},
+		GenesisPrecompiles: Precompiles{},
+		UpgradeConfig:      UpgradeConfig{},
 	}
 
-	TestChainConfig        = &ChainConfig{big.NewInt(1), DefaultFeeConfig, false, big.NewInt(0), big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), NetworkUpgrades{big.NewInt(0)}, PrecompileUpgrade{}, UpgradeConfig{}}
-	TestPreSubnetEVMConfig = &ChainConfig{big.NewInt(1), DefaultFeeConfig, false, big.NewInt(0), big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), NetworkUpgrades{}, PrecompileUpgrade{}, UpgradeConfig{}}
+	TestSubnetEVMConfig = &ChainConfig{
+		AvalancheContext:    AvalancheContext{snow.DefaultContextTest()},
+		ChainID:             big.NewInt(1),
+		FeeConfig:           DefaultFeeConfig,
+		AllowFeeRecipients:  false,
+		HomesteadBlock:      big.NewInt(0),
+		EIP150Block:         big.NewInt(0),
+		EIP150Hash:          common.Hash{},
+		EIP155Block:         big.NewInt(0),
+		EIP158Block:         big.NewInt(0),
+		ByzantiumBlock:      big.NewInt(0),
+		ConstantinopleBlock: big.NewInt(0),
+		PetersburgBlock:     big.NewInt(0),
+		IstanbulBlock:       big.NewInt(0),
+		MuirGlacierBlock:    big.NewInt(0),
+		MandatoryNetworkUpgrades: MandatoryNetworkUpgrades{
+			SubnetEVMTimestamp: utils.NewUint64(0),
+		},
+		GenesisPrecompiles: Precompiles{},
+		UpgradeConfig:      UpgradeConfig{},
+	}
+
+	TestPreSubnetEVMConfig = &ChainConfig{
+		AvalancheContext:         AvalancheContext{snow.DefaultContextTest()},
+		ChainID:                  big.NewInt(1),
+		FeeConfig:                DefaultFeeConfig,
+		AllowFeeRecipients:       false,
+		HomesteadBlock:           big.NewInt(0),
+		EIP150Block:              big.NewInt(0),
+		EIP150Hash:               common.Hash{},
+		EIP155Block:              big.NewInt(0),
+		EIP158Block:              big.NewInt(0),
+		ByzantiumBlock:           big.NewInt(0),
+		ConstantinopleBlock:      big.NewInt(0),
+		PetersburgBlock:          big.NewInt(0),
+		IstanbulBlock:            big.NewInt(0),
+		MuirGlacierBlock:         big.NewInt(0),
+		MandatoryNetworkUpgrades: MandatoryNetworkUpgrades{},
+		GenesisPrecompiles:       Precompiles{},
+		UpgradeConfig:            UpgradeConfig{},
+	}
+
+	TestRules = TestChainConfig.AvalancheRules(new(big.Int), 0)
 )
+
+// UpgradeConfig includes the following configs that may be specified in upgradeBytes:
+// - Timestamps that enable avalanche network upgrades,
+// - Enabling or disabling precompiles as network upgrades.
+type UpgradeConfig struct {
+	// Config for optional timestamps that enable network upgrades.
+	// Note: if OptionalUpgrades is specified in the JSON all previously activated
+	// forks must be present or upgradeBytes will be rejected.
+	OptionalNetworkUpgrades *OptionalNetworkUpgrades `json:"networkUpgrades,omitempty"`
+
+	// Config for modifying state as a network upgrade.
+	StateUpgrades []StateUpgrade `json:"stateUpgrades,omitempty"`
+
+	// Config for enabling and disabling precompiles as network upgrades.
+	PrecompileUpgrades []PrecompileUpgrade `json:"precompileUpgrades,omitempty"`
+}
+
+// AvalancheContext provides Avalanche specific context directly into the EVM.
+type AvalancheContext struct {
+	SnowCtx *snow.Context
+}
 
 // ChainConfig is the core config which determines the blockchain settings.
 //
@@ -98,6 +186,8 @@ var (
 // that any network, identified by its genesis block, can have its own
 // set of configuration options.
 type ChainConfig struct {
+	AvalancheContext `json:"-"` // Avalanche specific context set during VM initialization. Not serialized.
+
 	ChainID            *big.Int             `json:"chainId"`                      // chainId identifies the current chain and is used for replay protection
 	FeeConfig          commontype.FeeConfig `json:"feeConfig"`                    // Set the configuration for the dynamic fee algorithm
 	AllowFeeRecipients bool                 `json:"allowFeeRecipients,omitempty"` // Allows fees to be collected by block builders.
@@ -117,165 +207,220 @@ type ChainConfig struct {
 	IstanbulBlock       *big.Int `json:"istanbulBlock,omitempty"`       // Istanbul switch block (nil = no fork, 0 = already on istanbul)
 	MuirGlacierBlock    *big.Int `json:"muirGlacierBlock,omitempty"`    // Eip-2384 (bomb delay) switch block (nil = no fork, 0 = already activated)
 
-	NetworkUpgrades              // Config for timestamps that enable avalanche network upgrades
-	PrecompileUpgrade            // Config for enabling precompiles from genesis
-	UpgradeConfig     `json:"-"` // Config specified in upgradeBytes (avalanche network upgrades or enable/disabling precompiles). Skip encoding/decoding directly into ChainConfig.
+	MandatoryNetworkUpgrades             // Config for timestamps that enable mandatory network upgrades. Skip encoding/decoding directly into ChainConfig.
+	OptionalNetworkUpgrades              // Config for optional timestamps that enable network upgrades
+	GenesisPrecompiles       Precompiles `json:"-"` // Config for enabling precompiles from genesis. JSON encode/decode will be handled by the custom marshaler/unmarshaler.
+	UpgradeConfig            `json:"-"`  // Config specified in upgradeBytes (avalanche network upgrades or enable/disabling precompiles). Skip encoding/decoding directly into ChainConfig.
 }
 
-// UpgradeConfig includes the following configs that may be specified in upgradeBytes:
-// - Timestamps that enable avalanche network upgrades,
-// - Enabling or disabling precompiles as network upgrades.
-type UpgradeConfig struct {
-	// Config for blocks/timestamps that enable network upgrades.
-	// Note: if NetworkUpgrades is specified in the JSON all previously activated
-	// forks must be present or upgradeBytes will be rejected.
-	NetworkUpgrades *NetworkUpgrades `json:"networkUpgrades,omitempty"`
+// UnmarshalJSON parses the JSON-encoded data and stores the result in the
+// object pointed to by c.
+// This is a custom unmarshaler to handle the Precompiles field.
+// Precompiles was presented as an inline object in the JSON.
+// This custom unmarshaler ensures backwards compatibility with the old format.
+func (c *ChainConfig) UnmarshalJSON(data []byte) error {
+	// Alias ChainConfig to avoid recursion
+	type _ChainConfig ChainConfig
+	tmp := _ChainConfig{}
+	if err := json.Unmarshal(data, &tmp); err != nil {
+		return err
+	}
 
-	// Config for enabling and disabling precompiles as network upgrades.
-	PrecompileUpgrades []PrecompileUpgrade `json:"precompileUpgrades,omitempty"`
+	// At this point we have populated all fields except PrecompileUpgrade
+	*c = ChainConfig(tmp)
+
+	// Unmarshal inlined PrecompileUpgrade
+	return json.Unmarshal(data, &c.GenesisPrecompiles)
 }
 
-// String implements the fmt.Stringer interface.
-func (c *ChainConfig) String() string {
-	// convert nested data structures to json
-	feeBytes, err := json.Marshal(c.FeeConfig)
+// MarshalJSON returns the JSON encoding of c.
+// This is a custom marshaler to handle the Precompiles field.
+func (c ChainConfig) MarshalJSON() ([]byte, error) {
+	// Alias ChainConfig to avoid recursion
+	type _ChainConfig ChainConfig
+	tmp, err := json.Marshal(_ChainConfig(c))
 	if err != nil {
-		feeBytes = []byte("cannot marshal FeeConfig")
+		return nil, err
 	}
-	networkUpgradesBytes, err := json.Marshal(c.NetworkUpgrades)
+
+	// To include PrecompileUpgrades, we unmarshal the json representing c
+	// then directly add the corresponding keys to the json.
+	raw := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(tmp, &raw); err != nil {
+		return nil, err
+	}
+
+	for key, value := range c.GenesisPrecompiles {
+		conf, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		raw[key] = conf
+	}
+
+	return json.Marshal(raw)
+}
+
+// Description returns a human-readable description of ChainConfig.
+func (c *ChainConfig) Description() string {
+	var banner string
+
+	banner += fmt.Sprintf("Chain ID:  %v\n", c.ChainID)
+	banner += "Consensus: Dummy Consensus Engine\n\n"
+
+	// Create a list of forks with a short description of them. Forks that only
+	// makes sense for mainnet should be optional at printing to avoid bloating
+	// the output for testnets and private networks.
+	banner += "Hard Forks:\n"
+	banner += fmt.Sprintf(" - Homestead:                   #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/homestead.md)\n", c.HomesteadBlock)
+	banner += fmt.Sprintf(" - Tangerine Whistle (EIP 150): #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/tangerine-whistle.md)\n", c.EIP150Block)
+	banner += fmt.Sprintf(" - Spurious Dragon/1 (EIP 155): #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/spurious-dragon.md)\n", c.EIP155Block)
+	banner += fmt.Sprintf(" - Spurious Dragon/2 (EIP 158): #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/spurious-dragon.md)\n", c.EIP155Block)
+	banner += fmt.Sprintf(" - Byzantium:                   #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/byzantium.md)\n", c.ByzantiumBlock)
+	banner += fmt.Sprintf(" - Constantinople:              #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/constantinople.md)\n", c.ConstantinopleBlock)
+	banner += fmt.Sprintf(" - Petersburg:                  #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/petersburg.md)\n", c.PetersburgBlock)
+	banner += fmt.Sprintf(" - Istanbul:                    #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/istanbul.md)\n", c.IstanbulBlock)
+	if c.MuirGlacierBlock != nil {
+		banner += fmt.Sprintf(" - Muir Glacier:                #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/muir-glacier.md)\n", c.MuirGlacierBlock)
+	}
+	banner += "Mandatory Upgrades:\n"
+	if c.SubnetEVMTimestamp != nil {
+		banner += fmt.Sprintf(" - SubnetEVM Timestamp:             @%-10v (https://github.com/ava-labs/avalanchego/releases/tag/v1.10.0)\n", *c.SubnetEVMTimestamp)
+	}
+	if c.DUpgradeTimestamp != nil {
+		banner += fmt.Sprintf(" - DUpgrade Timestamp:              @%-10v (https://github.com/ava-labs/avalanchego/releases/tag/v1.11.0)\n", *c.DUpgradeTimestamp)
+	}
+	banner += "\n"
+
+	// Add Subnet-EVM custom fields
+	optionalNetworkUpgradeBytes, err := json.Marshal(c.OptionalNetworkUpgrades)
 	if err != nil {
-		networkUpgradesBytes = []byte("cannot marshal NetworkUpgrades")
+		optionalNetworkUpgradeBytes = []byte("cannot marshal OptionalNetworkUpgrades")
 	}
-	precompileUpgradeBytes, err := json.Marshal(c.PrecompileUpgrade)
+	banner += fmt.Sprintf("Optional Network Upgrades: %s", string(optionalNetworkUpgradeBytes))
+	banner += "\n"
+
+	precompileUpgradeBytes, err := json.Marshal(c.GenesisPrecompiles)
 	if err != nil {
 		precompileUpgradeBytes = []byte("cannot marshal PrecompileUpgrade")
 	}
+	banner += fmt.Sprintf("Precompile Upgrades: %s", string(precompileUpgradeBytes))
+	banner += "\n"
+
 	upgradeConfigBytes, err := json.Marshal(c.UpgradeConfig)
 	if err != nil {
 		upgradeConfigBytes = []byte("cannot marshal UpgradeConfig")
 	}
+	banner += fmt.Sprintf("Upgrade Config: %s", string(upgradeConfigBytes))
+	banner += "\n"
 
-	return fmt.Sprintf("{ChainID: %v Homestead: %v EIP150: %v EIP155: %v EIP158: %v Byzantium: %v Constantinople: %v Petersburg: %v Istanbul: %v, Muir Glacier: %v, Subnet EVM: %v, FeeConfig: %v, AllowFeeRecipients: %v, NetworkUpgrades: %v, PrecompileUpgrade: %v, UpgradeConfig: %v, Engine: Dummy Consensus Engine}",
-		c.ChainID,
-		c.HomesteadBlock,
-		c.EIP150Block,
-		c.EIP155Block,
-		c.EIP158Block,
-		c.ByzantiumBlock,
-		c.ConstantinopleBlock,
-		c.PetersburgBlock,
-		c.IstanbulBlock,
-		c.MuirGlacierBlock,
-		c.SubnetEVMTimestamp,
-		string(feeBytes),
-		c.AllowFeeRecipients,
-		string(networkUpgradesBytes),
-		string(precompileUpgradeBytes),
-		string(upgradeConfigBytes),
-	)
+	feeBytes, err := json.Marshal(c.FeeConfig)
+	if err != nil {
+		feeBytes = []byte("cannot marshal FeeConfig")
+	}
+	banner += fmt.Sprintf("Fee Config: %s", string(feeBytes))
+	banner += "\n"
+
+	banner += fmt.Sprintf("Allow Fee Recipients: %v", c.AllowFeeRecipients)
+	banner += "\n"
+	return banner
 }
 
 // IsHomestead returns whether num is either equal to the homestead block or greater.
 func (c *ChainConfig) IsHomestead(num *big.Int) bool {
-	return utils.IsForked(c.HomesteadBlock, num)
+	return utils.IsBlockForked(c.HomesteadBlock, num)
 }
 
 // IsEIP150 returns whether num is either equal to the EIP150 fork block or greater.
 func (c *ChainConfig) IsEIP150(num *big.Int) bool {
-	return utils.IsForked(c.EIP150Block, num)
+	return utils.IsBlockForked(c.EIP150Block, num)
 }
 
 // IsEIP155 returns whether num is either equal to the EIP155 fork block or greater.
 func (c *ChainConfig) IsEIP155(num *big.Int) bool {
-	return utils.IsForked(c.EIP155Block, num)
+	return utils.IsBlockForked(c.EIP155Block, num)
 }
 
 // IsEIP158 returns whether num is either equal to the EIP158 fork block or greater.
 func (c *ChainConfig) IsEIP158(num *big.Int) bool {
-	return utils.IsForked(c.EIP158Block, num)
+	return utils.IsBlockForked(c.EIP158Block, num)
 }
 
 // IsByzantium returns whether num is either equal to the Byzantium fork block or greater.
 func (c *ChainConfig) IsByzantium(num *big.Int) bool {
-	return utils.IsForked(c.ByzantiumBlock, num)
+	return utils.IsBlockForked(c.ByzantiumBlock, num)
 }
 
 // IsConstantinople returns whether num is either equal to the Constantinople fork block or greater.
 func (c *ChainConfig) IsConstantinople(num *big.Int) bool {
-	return utils.IsForked(c.ConstantinopleBlock, num)
+	return utils.IsBlockForked(c.ConstantinopleBlock, num)
 }
 
 // IsMuirGlacier returns whether num is either equal to the Muir Glacier (EIP-2384) fork block or greater.
 func (c *ChainConfig) IsMuirGlacier(num *big.Int) bool {
-	return utils.IsForked(c.MuirGlacierBlock, num)
+	return utils.IsBlockForked(c.MuirGlacierBlock, num)
 }
 
 // IsPetersburg returns whether num is either
 // - equal to or greater than the PetersburgBlock fork block,
 // - OR is nil, and Constantinople is active
 func (c *ChainConfig) IsPetersburg(num *big.Int) bool {
-	return utils.IsForked(c.PetersburgBlock, num) || c.PetersburgBlock == nil && utils.IsForked(c.ConstantinopleBlock, num)
+	return utils.IsBlockForked(c.PetersburgBlock, num) || c.PetersburgBlock == nil && utils.IsBlockForked(c.ConstantinopleBlock, num)
 }
 
 // IsIstanbul returns whether num is either equal to the Istanbul fork block or greater.
 func (c *ChainConfig) IsIstanbul(num *big.Int) bool {
-	return utils.IsForked(c.IstanbulBlock, num)
+	return utils.IsBlockForked(c.IstanbulBlock, num)
 }
 
-// IsSubnetEVM returns whether [blockTimestamp] is either equal to the SubnetEVM fork block timestamp or greater.
-func (c *ChainConfig) IsSubnetEVM(blockTimestamp *big.Int) bool {
-	return utils.IsForked(c.getNetworkUpgrades().SubnetEVMTimestamp, blockTimestamp)
+// IsSubnetEVM returns whether [time] represents a block
+// with a timestamp after the SubnetEVM upgrade time.
+func (c *ChainConfig) IsSubnetEVM(time uint64) bool {
+	return utils.IsTimestampForked(c.SubnetEVMTimestamp, time)
 }
 
-// PRECOMPILE UPGRADES START HERE
-
-// IsContractDeployerAllowList returns whether [blockTimestamp] is either equal to the ContractDeployerAllowList fork block timestamp or greater.
-func (c *ChainConfig) IsContractDeployerAllowList(blockTimestamp *big.Int) bool {
-	config := c.GetContractDeployerAllowListConfig(blockTimestamp)
-	return config != nil && !config.Disable
+// IsDUpgrade returns whether [time] represents a block
+// with a timestamp after the DUpgrade upgrade time.
+func (c *ChainConfig) IsDUpgrade(time uint64) bool {
+	return utils.IsTimestampForked(c.DUpgradeTimestamp, time)
 }
 
-// IsContractNativeMinter returns whether [blockTimestamp] is either equal to the NativeMinter fork block timestamp or greater.
-func (c *ChainConfig) IsContractNativeMinter(blockTimestamp *big.Int) bool {
-	config := c.GetContractNativeMinterConfig(blockTimestamp)
-	return config != nil && !config.Disable
+func (r *Rules) PredicatersExist() bool {
+	return len(r.Predicaters) > 0
 }
 
-// IsTxAllowList returns whether [blockTimestamp] is either equal to the TxAllowList fork block timestamp or greater.
-func (c *ChainConfig) IsTxAllowList(blockTimestamp *big.Int) bool {
-	config := c.GetTxAllowListConfig(blockTimestamp)
-	return config != nil && !config.Disable
+func (r *Rules) PredicaterExists(addr common.Address) bool {
+	_, PredicaterExists := r.Predicaters[addr]
+	return PredicaterExists
 }
 
-// IsFeeConfigManager returns whether [blockTimestamp] is either equal to the FeeConfigManager fork block timestamp or greater.
-func (c *ChainConfig) IsFeeConfigManager(blockTimestamp *big.Int) bool {
-	config := c.GetFeeConfigManagerConfig(blockTimestamp)
-	return config != nil && !config.Disable
+// IsPrecompileEnabled returns whether precompile with [address] is enabled at [timestamp].
+func (c *ChainConfig) IsPrecompileEnabled(address common.Address, timestamp uint64) bool {
+	config := c.getActivePrecompileConfig(address, timestamp)
+	return config != nil && !config.IsDisabled()
 }
-
-// ADD YOUR PRECOMPILE HERE
-/*
-func (c *ChainConfig) Is{YourPrecompile}(blockTimestamp *big.Int) bool {
-	config := c.Get{YourPrecompile}Config(blockTimestamp)
-	return config != nil && !config.Disable
-}
-*/
 
 // CheckCompatible checks whether scheduled fork transitions have been imported
 // with a mismatching chain configuration.
-func (c *ChainConfig) CheckCompatible(newcfg *ChainConfig, height uint64, timestamp uint64) *ConfigCompatError {
-	bNumber := new(big.Int).SetUint64(height)
-	bTimestamp := new(big.Int).SetUint64(timestamp)
-
+func (c *ChainConfig) CheckCompatible(newcfg *ChainConfig, height uint64, time uint64) *ConfigCompatError {
+	var (
+		bhead = new(big.Int).SetUint64(height)
+		btime = time
+	)
 	// Iterate checkCompatible to find the lowest conflict.
 	var lasterr *ConfigCompatError
 	for {
-		err := c.checkCompatible(newcfg, bNumber, bTimestamp)
-		if err == nil || (lasterr != nil && err.RewindTo == lasterr.RewindTo) {
+		err := c.checkCompatible(newcfg, bhead, btime)
+		if err == nil || (lasterr != nil && err.RewindToBlock == lasterr.RewindToBlock && err.RewindToTime == lasterr.RewindToTime) {
 			break
 		}
 		lasterr = err
-		bNumber.SetUint64(err.RewindTo)
+
+		if err.RewindToTime > 0 {
+			btime = err.RewindToTime
+		} else {
+			bhead.SetUint64(err.RewindToBlock)
+		}
 	}
 	return lasterr
 }
@@ -288,22 +433,28 @@ func (c *ChainConfig) Verify() error {
 
 	// Verify the precompile upgrades are internally consistent given the existing chainConfig.
 	if err := c.verifyPrecompileUpgrades(); err != nil {
-		return err
+		return fmt.Errorf("invalid precompile upgrades: %w", err)
+	}
+
+	// Verify the state upgrades are internally consistent given the existing chainConfig.
+	if err := c.verifyStateUpgrades(); err != nil {
+		return fmt.Errorf("invalid state upgrades: %w", err)
 	}
 
 	return nil
 }
 
+type fork struct {
+	name      string
+	block     *big.Int // some go-ethereum forks use block numbers
+	timestamp *uint64  // Avalanche forks use timestamps
+	optional  bool     // if true, the fork may be nil and next fork is still allowed
+}
+
 // CheckConfigForkOrder checks that we don't "skip" any forks, geth isn't pluggable enough
 // to guarantee that forks can be implemented in a different order than on official networks
 func (c *ChainConfig) CheckConfigForkOrder() error {
-	type fork struct {
-		name     string
-		block    *big.Int
-		optional bool // if true, the fork may be nil and next fork is still allowed
-	}
-	var lastFork fork
-	for _, cur := range []fork{
+	ethForks := []fork{
 		{name: "homesteadBlock", block: c.HomesteadBlock},
 		{name: "eip150Block", block: c.EIP150Block},
 		{name: "eip155Block", block: c.EIP155Block},
@@ -313,27 +464,11 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 		{name: "petersburgBlock", block: c.PetersburgBlock},
 		{name: "istanbulBlock", block: c.IstanbulBlock},
 		{name: "muirGlacierBlock", block: c.MuirGlacierBlock, optional: true},
-	} {
-		if cur.block != nil && common.Big0.Cmp(cur.block) != 0 {
-			return errNonGenesisForkByHeight
-		}
-		if lastFork.name != "" {
-			// Next one must be higher number
-			if lastFork.block == nil && cur.block != nil {
-				return fmt.Errorf("unsupported fork ordering: %v not enabled, but %v enabled at %v",
-					lastFork.name, cur.name, cur.block)
-			}
-			if lastFork.block != nil && cur.block != nil {
-				if lastFork.block.Cmp(cur.block) > 0 {
-					return fmt.Errorf("unsupported fork ordering: %v enabled at %v, but %v enabled at %v",
-						lastFork.name, lastFork.block, cur.name, cur.block)
-				}
-			}
-		}
-		// If it was optional and not set, then ignore it
-		if !cur.optional || cur.block != nil {
-			lastFork = cur
-		}
+	}
+
+	// Check that forks are enabled in order
+	if err := checkForks(ethForks, true); err != nil {
+		return err
 	}
 
 	// Note: In Avalanche, hard forks must take place via block timestamps instead
@@ -344,25 +479,41 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 	// Note: we do not add the optional stateful precompile configs in here because they are optional
 	// and independent, such that the ordering they are enabled does not impact the correctness of the
 	// chain config.
-	lastFork = fork{}
-	for _, cur := range []fork{
-		{name: "subnetEVMTimestamp", block: c.SubnetEVMTimestamp},
-	} {
+	if err := checkForks(c.mandatoryForkOrder(), false); err != nil {
+		return err
+	}
+
+	// Check optional forks are enabled in order
+	if err := checkForks(c.optionalForkOrder(), false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// checkForks checks that forks are enabled in order and returns an error if not
+// [blockFork] is true if the fork is a block number fork, false if it is a timestamp fork
+func checkForks(forks []fork, blockFork bool) error {
+	lastFork := fork{}
+	for _, cur := range forks {
+		if blockFork && cur.block != nil && common.Big0.Cmp(cur.block) != 0 {
+			return errNonGenesisForkByHeight
+		}
 		if lastFork.name != "" {
 			// Next one must be higher number
-			if lastFork.block == nil && cur.block != nil {
+			if lastFork.timestamp == nil && cur.timestamp != nil {
 				return fmt.Errorf("unsupported fork ordering: %v not enabled, but %v enabled at %v",
-					lastFork.name, cur.name, cur.block)
+					lastFork.name, cur.name, cur.timestamp)
 			}
-			if lastFork.block != nil && cur.block != nil {
-				if lastFork.block.Cmp(cur.block) > 0 {
+			if lastFork.timestamp != nil && cur.timestamp != nil {
+				if *lastFork.timestamp > *cur.timestamp {
 					return fmt.Errorf("unsupported fork ordering: %v enabled at %v, but %v enabled at %v",
-						lastFork.name, lastFork.block, cur.name, cur.block)
+						lastFork.name, lastFork.timestamp, cur.name, cur.timestamp)
 				}
 			}
 		}
 		// If it was optional and not set, then ignore it
-		if !cur.optional || cur.block != nil {
+		if !cur.optional || cur.timestamp != nil {
 			lastFork = cur
 		}
 	}
@@ -372,56 +523,66 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 // checkCompatible confirms that [newcfg] is backwards compatible with [c] to upgrade with the given head block height and timestamp.
 // This confirms that all Ethereum and Avalanche upgrades are backwards compatible as well as that the precompile config is backwards
 // compatible.
-func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, lastHeight *big.Int, lastTimestamp *big.Int) *ConfigCompatError {
-	if isForkIncompatible(c.HomesteadBlock, newcfg.HomesteadBlock, lastHeight) {
-		return newCompatError("Homestead fork block", c.HomesteadBlock, newcfg.HomesteadBlock)
+func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, height *big.Int, time uint64) *ConfigCompatError {
+	if isForkBlockIncompatible(c.HomesteadBlock, newcfg.HomesteadBlock, height) {
+		return newBlockCompatError("Homestead fork block", c.HomesteadBlock, newcfg.HomesteadBlock)
 	}
-	if isForkIncompatible(c.EIP150Block, newcfg.EIP150Block, lastHeight) {
-		return newCompatError("EIP150 fork block", c.EIP150Block, newcfg.EIP150Block)
+	if isForkBlockIncompatible(c.EIP150Block, newcfg.EIP150Block, height) {
+		return newBlockCompatError("EIP150 fork block", c.EIP150Block, newcfg.EIP150Block)
 	}
-	if isForkIncompatible(c.EIP155Block, newcfg.EIP155Block, lastHeight) {
-		return newCompatError("EIP155 fork block", c.EIP155Block, newcfg.EIP155Block)
+	if isForkBlockIncompatible(c.EIP155Block, newcfg.EIP155Block, height) {
+		return newBlockCompatError("EIP155 fork block", c.EIP155Block, newcfg.EIP155Block)
 	}
-	if isForkIncompatible(c.EIP158Block, newcfg.EIP158Block, lastHeight) {
-		return newCompatError("EIP158 fork block", c.EIP158Block, newcfg.EIP158Block)
+	if isForkBlockIncompatible(c.EIP158Block, newcfg.EIP158Block, height) {
+		return newBlockCompatError("EIP158 fork block", c.EIP158Block, newcfg.EIP158Block)
 	}
-	if c.IsEIP158(lastHeight) && !utils.BigNumEqual(c.ChainID, newcfg.ChainID) {
-		return newCompatError("EIP158 chain ID", c.EIP158Block, newcfg.EIP158Block)
+	if c.IsEIP158(height) && !utils.BigNumEqual(c.ChainID, newcfg.ChainID) {
+		return newBlockCompatError("EIP158 chain ID", c.EIP158Block, newcfg.EIP158Block)
 	}
-	if isForkIncompatible(c.ByzantiumBlock, newcfg.ByzantiumBlock, lastHeight) {
-		return newCompatError("Byzantium fork block", c.ByzantiumBlock, newcfg.ByzantiumBlock)
+	if isForkBlockIncompatible(c.ByzantiumBlock, newcfg.ByzantiumBlock, height) {
+		return newBlockCompatError("Byzantium fork block", c.ByzantiumBlock, newcfg.ByzantiumBlock)
 	}
-	if isForkIncompatible(c.ConstantinopleBlock, newcfg.ConstantinopleBlock, lastHeight) {
-		return newCompatError("Constantinople fork block", c.ConstantinopleBlock, newcfg.ConstantinopleBlock)
+	if isForkBlockIncompatible(c.ConstantinopleBlock, newcfg.ConstantinopleBlock, height) {
+		return newBlockCompatError("Constantinople fork block", c.ConstantinopleBlock, newcfg.ConstantinopleBlock)
 	}
-	if isForkIncompatible(c.PetersburgBlock, newcfg.PetersburgBlock, lastHeight) {
+	if isForkBlockIncompatible(c.PetersburgBlock, newcfg.PetersburgBlock, height) {
 		// the only case where we allow Petersburg to be set in the past is if it is equal to Constantinople
 		// mainly to satisfy fork ordering requirements which state that Petersburg fork be set if Constantinople fork is set
-		if isForkIncompatible(c.ConstantinopleBlock, newcfg.PetersburgBlock, lastHeight) {
-			return newCompatError("Petersburg fork block", c.PetersburgBlock, newcfg.PetersburgBlock)
+		if isForkBlockIncompatible(c.ConstantinopleBlock, newcfg.PetersburgBlock, height) {
+			return newBlockCompatError("Petersburg fork block", c.PetersburgBlock, newcfg.PetersburgBlock)
 		}
 	}
-	if isForkIncompatible(c.IstanbulBlock, newcfg.IstanbulBlock, lastHeight) {
-		return newCompatError("Istanbul fork block", c.IstanbulBlock, newcfg.IstanbulBlock)
+	if isForkBlockIncompatible(c.IstanbulBlock, newcfg.IstanbulBlock, height) {
+		return newBlockCompatError("Istanbul fork block", c.IstanbulBlock, newcfg.IstanbulBlock)
 	}
-	if isForkIncompatible(c.MuirGlacierBlock, newcfg.MuirGlacierBlock, lastHeight) {
-		return newCompatError("Muir Glacier fork block", c.MuirGlacierBlock, newcfg.MuirGlacierBlock)
+	if isForkBlockIncompatible(c.MuirGlacierBlock, newcfg.MuirGlacierBlock, height) {
+		return newBlockCompatError("Muir Glacier fork block", c.MuirGlacierBlock, newcfg.MuirGlacierBlock)
+	}
+
+	// Check avalanhe network upgrades
+	if err := c.CheckMandatoryCompatible(&newcfg.MandatoryNetworkUpgrades, time); err != nil {
+		return err
 	}
 
 	// Check subnet-evm specific activations
-	newNetworkUpgrades := newcfg.getNetworkUpgrades()
-	if c.UpgradeConfig.NetworkUpgrades != nil && newcfg.UpgradeConfig.NetworkUpgrades == nil {
-		// Note: if the current NetworkUpgrades are set via UpgradeConfig, then a new config
-		// without NetworkUpgrades will be treated as having specified an empty set of network
+	newOptionalNetworkUpgrades := newcfg.getOptionalNetworkUpgrades()
+	if c.UpgradeConfig.OptionalNetworkUpgrades != nil && newcfg.UpgradeConfig.OptionalNetworkUpgrades == nil {
+		// Note: if the current OptionalNetworkUpgrades are set via UpgradeConfig, then a new config
+		// without OptionalNetworkUpgrades will be treated as having specified an empty set of network
 		// upgrades (ie., treated as the user intends to cancel scheduled forks)
-		newNetworkUpgrades = &NetworkUpgrades{}
+		newOptionalNetworkUpgrades = &OptionalNetworkUpgrades{}
 	}
-	if err := c.getNetworkUpgrades().CheckCompatible(newNetworkUpgrades, lastTimestamp); err != nil {
+	if err := c.getOptionalNetworkUpgrades().CheckOptionalCompatible(newOptionalNetworkUpgrades, time); err != nil {
 		return err
 	}
 
 	// Check that the precompiles on the new config are compatible with the existing precompile config.
-	if err := c.CheckPrecompilesCompatible(newcfg.PrecompileUpgrades, lastTimestamp); err != nil {
+	if err := c.CheckPrecompilesCompatible(newcfg.PrecompileUpgrades, time); err != nil {
+		return err
+	}
+
+	// Check that the state upgrades on the new config are compatible with the existing state upgrade config.
+	if err := c.CheckStateUpgradesCompatible(newcfg.StateUpgrades, time); err != nil {
 		return err
 	}
 
@@ -429,32 +590,66 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, lastHeight *big.Int, 
 	return nil
 }
 
-// getNetworkUpgrades returns NetworkUpgrades from upgrade config if set there,
+// getOptionalNetworkUpgrades returns OptionalNetworkUpgrades from upgrade config if set there,
 // otherwise it falls back to the genesis chain config.
-func (c *ChainConfig) getNetworkUpgrades() *NetworkUpgrades {
-	if upgradeConfigOverride := c.UpgradeConfig.NetworkUpgrades; upgradeConfigOverride != nil {
+func (c *ChainConfig) getOptionalNetworkUpgrades() *OptionalNetworkUpgrades {
+	if upgradeConfigOverride := c.UpgradeConfig.OptionalNetworkUpgrades; upgradeConfigOverride != nil {
 		return upgradeConfigOverride
 	}
-	return &c.NetworkUpgrades
+	return &c.OptionalNetworkUpgrades
 }
 
-// isForkIncompatible returns true if a fork scheduled at s1 cannot be rescheduled to
+// isForkBlockIncompatible returns true if a fork scheduled at s1 cannot be rescheduled to
 // block s2 because head is already past the fork.
-func isForkIncompatible(s1, s2, head *big.Int) bool {
-	return (utils.IsForked(s1, head) || utils.IsForked(s2, head)) && !utils.BigNumEqual(s1, s2)
+func isForkBlockIncompatible(s1, s2, head *big.Int) bool {
+	return (utils.IsBlockForked(s1, head) || utils.IsBlockForked(s2, head)) && !configBlockEqual(s1, s2)
+}
+
+func configBlockEqual(x, y *big.Int) bool {
+	if x == nil {
+		return y == nil
+	}
+	if y == nil {
+		return x == nil
+	}
+	return x.Cmp(y) == 0
+}
+
+// isForkTimestampIncompatible returns true if a fork scheduled at timestamp s1
+// cannot be rescheduled to timestamp s2 because head is already past the fork.
+func isForkTimestampIncompatible(s1, s2 *uint64, head uint64) bool {
+	return (utils.IsTimestampForked(s1, head) || utils.IsTimestampForked(s2, head)) && !configTimestampEqual(s1, s2)
+}
+
+func configTimestampEqual(x, y *uint64) bool {
+	if x == nil {
+		return y == nil
+	}
+	if y == nil {
+		return x == nil
+	}
+	return *x == *y
 }
 
 // ConfigCompatError is raised if the locally-stored blockchain is initialised with a
 // ChainConfig that would alter the past.
 type ConfigCompatError struct {
 	What string
-	// block numbers of the stored and new configurations
-	StoredConfig, NewConfig *big.Int
+
+	// block numbers of the stored and new configurations if block based forking
+	StoredBlock, NewBlock *big.Int
+
+	// timestamps of the stored and new configurations if time based forking
+	StoredTime, NewTime *uint64
+
 	// the block number to which the local chain must be rewound to correct the error
-	RewindTo uint64
+	RewindToBlock uint64
+
+	// the timestamp to which the local chain must be rewound to correct the error
+	RewindToTime uint64
 }
 
-func newCompatError(what string, storedblock, newblock *big.Int) *ConfigCompatError {
+func newBlockCompatError(what string, storedblock, newblock *big.Int) *ConfigCompatError {
 	var rew *big.Int
 	switch {
 	case storedblock == nil:
@@ -464,15 +659,45 @@ func newCompatError(what string, storedblock, newblock *big.Int) *ConfigCompatEr
 	default:
 		rew = newblock
 	}
-	err := &ConfigCompatError{what, storedblock, newblock, 0}
+	err := &ConfigCompatError{
+		What:          what,
+		StoredBlock:   storedblock,
+		NewBlock:      newblock,
+		RewindToBlock: 0,
+	}
 	if rew != nil && rew.Sign() > 0 {
-		err.RewindTo = rew.Uint64() - 1
+		err.RewindToBlock = rew.Uint64() - 1
+	}
+	return err
+}
+
+func newTimestampCompatError(what string, storedtime, newtime *uint64) *ConfigCompatError {
+	var rew *uint64
+	switch {
+	case storedtime == nil:
+		rew = newtime
+	case newtime == nil || *storedtime < *newtime:
+		rew = storedtime
+	default:
+		rew = newtime
+	}
+	err := &ConfigCompatError{
+		What:         what,
+		StoredTime:   storedtime,
+		NewTime:      newtime,
+		RewindToTime: 0,
+	}
+	if rew != nil && *rew > 0 {
+		err.RewindToTime = *rew - 1
 	}
 	return err
 }
 
 func (err *ConfigCompatError) Error() string {
-	return fmt.Sprintf("mismatching %s in database (have %d, want %d, rewindto %d)", err.What, err.StoredConfig, err.NewConfig, err.RewindTo)
+	if err.StoredBlock != nil {
+		return fmt.Sprintf("mismatching %s in database (have block %d, want block %d, rewindto block %d)", err.What, err.StoredBlock, err.NewBlock, err.RewindToBlock)
+	}
+	return fmt.Sprintf("mismatching %s in database (have timestamp %d, want timestamp %d, rewindto timestamp %d)", err.What, err.StoredTime, err.NewTime, err.RewindToTime)
 }
 
 // Rules wraps ChainConfig and is merely syntactic sugar or can be used for functions
@@ -487,20 +712,25 @@ type Rules struct {
 
 	// Rules for Avalanche releases
 	IsSubnetEVM bool
+	IsDUpgrade  bool
 
-	// Optional stateful precompile rules
-	IsContractDeployerAllowListEnabled bool
-	IsContractNativeMinterEnabled      bool
-	IsTxAllowListEnabled               bool
-	IsFeeConfigManagerEnabled          bool
-	// ADD YOUR PRECOMPILE HERE
-	// Is{YourPrecompile}Enabled         bool
-
-	// Precompiles maps addresses to stateful precompiled contracts that are enabled
+	// ActivePrecompiles maps addresses to stateful precompiled contracts that are enabled
 	// for this rule set.
 	// Note: none of these addresses should conflict with the address space used by
 	// any existing precompiles.
-	Precompiles map[common.Address]precompile.StatefulPrecompiledContract
+	ActivePrecompiles map[common.Address]precompileconfig.Config
+	// Predicaters maps addresses to stateful precompile Predicaters
+	// that are enabled for this rule set.
+	Predicaters map[common.Address]precompileconfig.Predicater
+	// AccepterPrecompiles map addresses to stateful precompile accepter functions
+	// that are enabled for this rule set.
+	AccepterPrecompiles map[common.Address]precompileconfig.Accepter
+}
+
+// IsPrecompileEnabled returns true if the precompile at [addr] is enabled for this rule set.
+func (r *Rules) IsPrecompileEnabled(addr common.Address) bool {
+	_, ok := r.ActivePrecompiles[addr]
+	return ok
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -524,30 +754,108 @@ func (c *ChainConfig) rules(num *big.Int) Rules {
 
 // AvalancheRules returns the Avalanche modified rules to support Avalanche
 // network upgrades
-func (c *ChainConfig) AvalancheRules(blockNum, blockTimestamp *big.Int) Rules {
+func (c *ChainConfig) AvalancheRules(blockNum *big.Int, timestamp uint64) Rules {
 	rules := c.rules(blockNum)
 
-	rules.IsSubnetEVM = c.IsSubnetEVM(blockTimestamp)
-	rules.IsContractDeployerAllowListEnabled = c.IsContractDeployerAllowList(blockTimestamp)
-	rules.IsContractNativeMinterEnabled = c.IsContractNativeMinter(blockTimestamp)
-	rules.IsTxAllowListEnabled = c.IsTxAllowList(blockTimestamp)
-	rules.IsFeeConfigManagerEnabled = c.IsFeeConfigManager(blockTimestamp)
-	// ADD YOUR PRECOMPILE HERE
-	// rules.Is{YourPrecompile}Enabled = c.{IsYourPrecompile}(blockTimestamp)
+	rules.IsSubnetEVM = c.IsSubnetEVM(timestamp)
+	rules.IsDUpgrade = c.IsDUpgrade(timestamp)
 
 	// Initialize the stateful precompiles that should be enabled at [blockTimestamp].
-	rules.Precompiles = make(map[common.Address]precompile.StatefulPrecompiledContract)
-	for _, config := range c.EnabledStatefulPrecompiles(blockTimestamp) {
-		if config.IsDisabled() {
-			continue
+	rules.ActivePrecompiles = make(map[common.Address]precompileconfig.Config)
+	rules.Predicaters = make(map[common.Address]precompileconfig.Predicater)
+	rules.AccepterPrecompiles = make(map[common.Address]precompileconfig.Accepter)
+	for _, module := range modules.RegisteredModules() {
+		if config := c.getActivePrecompileConfig(module.Address, timestamp); config != nil && !config.IsDisabled() {
+			rules.ActivePrecompiles[module.Address] = config
+			if predicater, ok := config.(precompileconfig.Predicater); ok {
+				rules.Predicaters[module.Address] = predicater
+			}
+			if precompileAccepter, ok := config.(precompileconfig.Accepter); ok {
+				rules.AccepterPrecompiles[module.Address] = precompileAccepter
+			}
 		}
-		rules.Precompiles[config.Address()] = config.Contract()
 	}
 
 	return rules
 }
 
-// GetFeeConfig returns the FeeConfig
+// GetFeeConfig returns the original FeeConfig contained in the genesis ChainConfig.
+// Implements precompile.ChainConfig interface.
 func (c *ChainConfig) GetFeeConfig() commontype.FeeConfig {
 	return c.FeeConfig
+}
+
+// AllowedFeeRecipients returns the original AllowedFeeRecipients parameter contained in the genesis ChainConfig.
+// Implements precompile.ChainConfig interface.
+func (c *ChainConfig) AllowedFeeRecipients() bool {
+	return c.AllowFeeRecipients
+}
+
+type ChainConfigWithUpgradesJSON struct {
+	ChainConfig
+	UpgradeConfig UpgradeConfig `json:"upgrades,omitempty"`
+}
+
+// MarshalJSON implements json.Marshaler. This is a workaround for the fact that
+// the embedded ChainConfig struct has a MarshalJSON method, which prevents
+// the default JSON marshalling from working for UpgradeConfig.
+// TODO: consider removing this method by allowing external tag for the embedded
+// ChainConfig struct.
+func (cu ChainConfigWithUpgradesJSON) MarshalJSON() ([]byte, error) {
+	// embed the ChainConfig struct into the response
+	chainConfigJSON, err := json.Marshal(cu.ChainConfig)
+	if err != nil {
+		return nil, err
+	}
+	if len(chainConfigJSON) > maxJSONLen {
+		return nil, errors.New("value too large")
+	}
+
+	type upgrades struct {
+		UpgradeConfig UpgradeConfig `json:"upgrades"`
+	}
+
+	upgradeJSON, err := json.Marshal(upgrades{cu.UpgradeConfig})
+	if err != nil {
+		return nil, err
+	}
+	if len(upgradeJSON) > maxJSONLen {
+		return nil, errors.New("value too large")
+	}
+
+	// merge the two JSON objects
+	mergedJSON := make([]byte, 0, len(chainConfigJSON)+len(upgradeJSON)+1)
+	mergedJSON = append(mergedJSON, chainConfigJSON[:len(chainConfigJSON)-1]...)
+	mergedJSON = append(mergedJSON, ',')
+	mergedJSON = append(mergedJSON, upgradeJSON[1:]...)
+	return mergedJSON, nil
+}
+
+func (cu *ChainConfigWithUpgradesJSON) UnmarshalJSON(input []byte) error {
+	var cc ChainConfig
+	if err := json.Unmarshal(input, &cc); err != nil {
+		return err
+	}
+
+	type upgrades struct {
+		UpgradeConfig UpgradeConfig `json:"upgrades"`
+	}
+
+	var u upgrades
+	if err := json.Unmarshal(input, &u); err != nil {
+		return err
+	}
+	cu.ChainConfig = cc
+	cu.UpgradeConfig = u.UpgradeConfig
+	return nil
+}
+
+// ToWithUpgradesJSON converts the ChainConfig to ChainConfigWithUpgradesJSON with upgrades explicitly displayed.
+// ChainConfig does not include upgrades in its JSON output.
+// This is a workaround for showing upgrades in the JSON output.
+func (c *ChainConfig) ToWithUpgradesJSON() *ChainConfigWithUpgradesJSON {
+	return &ChainConfigWithUpgradesJSON{
+		ChainConfig:   *c,
+		UpgradeConfig: c.UpgradeConfig,
+	}
 }

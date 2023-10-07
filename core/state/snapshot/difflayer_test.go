@@ -28,11 +28,12 @@ package snapshot
 
 import (
 	"bytes"
+	crand "crypto/rand"
 	"math/rand"
 	"testing"
 
-	"github.com/VictoriaMetrics/fastcache"
 	"github.com/ava-labs/subnet-evm/ethdb/memorydb"
+	"github.com/ava-labs/subnet-evm/utils"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
@@ -83,7 +84,7 @@ func TestMergeBasics(t *testing.T) {
 		if rand.Intn(2) == 0 {
 			accStorage := make(map[common.Hash][]byte)
 			value := make([]byte, 32)
-			rand.Read(value)
+			crand.Read(value)
 			accStorage[randomHash()] = value
 			storage[h] = accStorage
 		}
@@ -133,7 +134,9 @@ func TestMergeBasics(t *testing.T) {
 
 // TestMergeDelete tests some deletion
 func TestMergeDelete(t *testing.T) {
-	storage := make(map[common.Hash]map[common.Hash][]byte)
+	var (
+		storage = make(map[common.Hash]map[common.Hash][]byte)
+	)
 	// Fill up a parent
 	h1 := common.HexToHash("0x01")
 	h2 := common.HexToHash("0x02")
@@ -243,7 +246,7 @@ func TestInsertAndMerge(t *testing.T) {
 func emptyLayer() *diskLayer {
 	return &diskLayer{
 		diskdb: memorydb.New(),
-		cache:  fastcache.New(500 * 1024),
+		cache:  utils.NewMeteredCache(500*1024, "", "", 0),
 	}
 }
 
@@ -302,7 +305,7 @@ func BenchmarkSearchSlot(b *testing.B) {
 		accStorage := make(map[common.Hash][]byte)
 		for i := 0; i < 5; i++ {
 			value := make([]byte, 32)
-			rand.Read(value)
+			crand.Read(value)
 			accStorage[randomHash()] = value
 			storage[accountKey] = accStorage
 		}
@@ -338,7 +341,7 @@ func BenchmarkFlatten(b *testing.B) {
 			accStorage := make(map[common.Hash][]byte)
 			for i := 0; i < 20; i++ {
 				value := make([]byte, 32)
-				rand.Read(value)
+				crand.Read(value)
 				accStorage[randomHash()] = value
 			}
 			storage[accountKey] = accStorage

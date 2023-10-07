@@ -5,19 +5,20 @@ package evm
 
 import (
 	"github.com/ava-labs/avalanchego/ids"
-	"github.com/ava-labs/avalanchego/snow"
+	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/vms"
 )
 
 var (
 	// ID this VM should be referenced by
-	ID = ids.ID{'s', 'u', 'b', 'n', 'e', 't', 'e', 'v', 'm'}
+	IDStr = "subnetevm"
+	ID    = ids.ID{'s', 'u', 'b', 'n', 'e', 't', 'e', 'v', 'm'}
 
 	_ vms.Factory = &Factory{}
 )
 
 type Factory struct{}
 
-func (f *Factory) New(*snow.Context) (interface{}, error) {
+func (*Factory) New(logging.Logger) (interface{}, error) {
 	return &VM{}, nil
 }

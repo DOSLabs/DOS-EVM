@@ -98,6 +98,7 @@ type Client interface {
 	CallContractAtHash(ctx context.Context, msg interfaces.CallMsg, blockHash common.Hash) ([]byte, error)
 	SuggestGasPrice(context.Context) (*big.Int, error)
 	SuggestGasTipCap(context.Context) (*big.Int, error)
+	FeeHistory(ctx context.Context, blockCount uint64, lastBlock *big.Int, rewardPercentiles []float64) (*interfaces.FeeHistory, error)
 	EstimateGas(context.Context, interfaces.CallMsg) (uint64, error)
 	EstimateBaseFee(context.Context) (*big.Int, error)
 	SendTransaction(context.Context, *types.Transaction) error
@@ -179,15 +180,19 @@ func (ec *client) getBlock(ctx context.Context, method string, args ...interface
 	err := ec.c.CallContext(ctx, &raw, method, args...)
 	if err != nil {
 		return nil, err
-	} else if len(raw) == 0 {
-		return nil, interfaces.NotFound
 	}
+
 	// Decode header and transactions.
 	var head *types.Header
-	var body rpcBlock
 	if err := json.Unmarshal(raw, &head); err != nil {
 		return nil, err
 	}
+	// When the block is not found, the API returns JSON null.
+	if head == nil {
+		return nil, interfaces.NotFound
+	}
+
+	var body rpcBlock
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return nil, err
 	}
@@ -198,10 +203,10 @@ func (ec *client) getBlock(ctx context.Context, method string, args ...interface
 	if head.UncleHash != types.EmptyUncleHash && len(body.UncleHashes) == 0 {
 		return nil, fmt.Errorf("server returned empty uncle list but block header indicates uncles")
 	}
-	if head.TxHash == types.EmptyRootHash && len(body.Transactions) > 0 {
+	if head.TxHash == types.EmptyTxsHash && len(body.Transactions) > 0 {
 		return nil, fmt.Errorf("server returned non-empty transaction list but block header indicates no transactions")
 	}
-	if head.TxHash != types.EmptyRootHash && len(body.Transactions) == 0 {
+	if head.TxHash != types.EmptyTxsHash && len(body.Transactions) == 0 {
 		return nil, fmt.Errorf("server returned empty transaction list but block header indicates transactions")
 	}
 	// Load uncles because they are not included in the block response.
@@ -383,7 +388,7 @@ func (ec *client) SubscribeNewAcceptedTransactions(ctx context.Context, ch chan<
 	return ec.c.EthSubscribe(ctx, ch, "newAcceptedTransactions")
 }
 
-// SubscribeNewAcceptedTransactions subscribes to notifications about the accepted transaction hashes on the given channel.
+// SubscribeNewPendingTransactions subscribes to notifications about the pending transaction hashes on the given channel.
 func (ec *client) SubscribeNewPendingTransactions(ctx context.Context, ch chan<- *common.Hash) (interfaces.Subscription, error) {
 	return ec.c.EthSubscribe(ctx, ch, "newPendingTransactions")
 }
@@ -396,7 +401,7 @@ func (ec *client) SubscribeNewHead(ctx context.Context, ch chan<- *types.Header)
 
 // State Access
 
-// NetworkID returns the network ID (also known as the chain ID) for this chain.
+// NetworkID returns the network ID for this client.
 func (ec *client) NetworkID(ctx context.Context) (*big.Int, error) {
 	version := new(big.Int)
 	var ver string
@@ -557,6 +562,38 @@ func (ec *client) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
 	return (*big.Int)(&hex), nil
 }
 
+type feeHistoryResultMarshaling struct {
+	OldestBlock  *hexutil.Big     `json:"oldestBlock"`
+	Reward       [][]*hexutil.Big `json:"reward,omitempty"`
+	BaseFee      []*hexutil.Big   `json:"baseFeePerGas,omitempty"`
+	GasUsedRatio []float64        `json:"gasUsedRatio"`
+}
+
+// FeeHistory retrieves the fee market history.
+func (ec *client) FeeHistory(ctx context.Context, blockCount uint64, lastBlock *big.Int, rewardPercentiles []float64) (*interfaces.FeeHistory, error) {
+	var res feeHistoryResultMarshaling
+	if err := ec.c.CallContext(ctx, &res, "eth_feeHistory", hexutil.Uint(blockCount), ToBlockNumArg(lastBlock), rewardPercentiles); err != nil {
+		return nil, err
+	}
+	reward := make([][]*big.Int, len(res.Reward))
+	for i, r := range res.Reward {
+		reward[i] = make([]*big.Int, len(r))
+		for j, r := range r {
+			reward[i][j] = (*big.Int)(r)
+		}
+	}
+	baseFee := make([]*big.Int, len(res.BaseFee))
+	for i, b := range res.BaseFee {
+		baseFee[i] = (*big.Int)(b)
+	}
+	return &interfaces.FeeHistory{
+		OldestBlock:  (*big.Int)(res.OldestBlock),
+		Reward:       reward,
+		BaseFee:      baseFee,
+		GasUsedRatio: res.GasUsedRatio,
+	}, nil
+}
+
 // EstimateGas tries to estimate the gas needed to execute a specific transaction based on
 // the current pending state of the backend blockchain. There is no guarantee that this is
 // the true gas limit requirement as other transactions may be added or removed by miners,
@@ -599,12 +636,12 @@ func ToBlockNumArg(number *big.Int) string {
 	// negative numbers to special strings (latest, pending) then is
 	// used on its server side. See rpc/types.go for the comparison.
 	// In Subnet EVM, latest, pending, and accepted are all treated the same
-	// therefore, if [number] is nil or a negative number in [-3, -1]
+	// therefore, if [number] is nil or a negative number in [-4, -1]
 	// we want the latest accepted block
 	if number == nil {
 		return "latest"
 	}
-	low := big.NewInt(-3)
+	low := big.NewInt(-4)
 	high := big.NewInt(-1)
 	if number.Cmp(low) >= 0 && number.Cmp(high) <= 0 {
 		return "latest"

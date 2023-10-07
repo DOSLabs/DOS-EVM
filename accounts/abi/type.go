@@ -71,8 +71,10 @@ type Type struct {
 	TupleType     reflect.Type // Underlying struct of the tuple
 }
 
-// typeRegex parses the abi sub types
-var typeRegex = regexp.MustCompile("([a-zA-Z]+)(([0-9]+)(x([0-9]+))?)?")
+var (
+	// typeRegex parses the abi sub types
+	typeRegex = regexp.MustCompile("([a-zA-Z]+)(([0-9]+)(x([0-9]+))?)?")
+)
 
 // NewType creates a new reflection type of abi type given in t.
 func NewType(t string, internalType string, components []ArgumentMarshaling) (typ Type, err error) {
@@ -162,6 +164,9 @@ func NewType(t string, internalType string, components []ArgumentMarshaling) (ty
 		if varSize == 0 {
 			typ.T = BytesTy
 		} else {
+			if varSize > 32 {
+				return Type{}, fmt.Errorf("unsupported arg type: %s", t)
+			}
 			typ.T = FixedBytesTy
 			typ.Size = varSize
 		}
