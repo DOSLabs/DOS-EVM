@@ -38,10 +38,10 @@ import (
 	"github.com/ava-labs/subnet-evm/core/state"
 	"github.com/ava-labs/subnet-evm/core/types"
 	"github.com/ava-labs/subnet-evm/core/vm"
-	"github.com/ava-labs/subnet-evm/ethdb"
 	"github.com/ava-labs/subnet-evm/params"
 	"github.com/ava-labs/subnet-evm/trie"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethdb"
 )
 
 // BlockGen creates blocks for testing.
@@ -271,7 +271,7 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 			}
 
 			// Write state changes to db
-			root, err := statedb.Commit(config.IsEIP158(b.header.Number), false)
+			root, err := statedb.Commit(b.header.Number.Uint64(), config.IsEIP158(b.header.Number), false)
 			if err != nil {
 				panic(fmt.Sprintf("state write error: %v", err))
 			}
@@ -335,7 +335,6 @@ func makeHeader(chain consensus.ChainReader, config *params.ChainConfig, parent 
 		Number: new(big.Int).Add(parent.Number(), common.Big1),
 		Time:   time,
 	}
-
 	if chain.Config().IsSubnetEVM(time) {
 		feeConfig, _, err := chain.GetFeeConfigAt(parent.Header())
 		if err != nil {

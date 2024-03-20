@@ -16,7 +16,7 @@ import (
 	"github.com/ava-labs/avalanchego/snow/choices"
 	"github.com/ava-labs/avalanchego/snow/engine/snowman/block"
 	"github.com/ava-labs/avalanchego/snow/validators"
-	"github.com/ava-labs/avalanchego/utils"
+	avagoUtils "github.com/ava-labs/avalanchego/utils"
 	"github.com/ava-labs/avalanchego/utils/crypto/bls"
 	"github.com/ava-labs/avalanchego/utils/set"
 	"github.com/ava-labs/avalanchego/vms/components/chain"
@@ -27,10 +27,11 @@ import (
 	"github.com/ava-labs/subnet-evm/core/types"
 	"github.com/ava-labs/subnet-evm/eth/tracers"
 	"github.com/ava-labs/subnet-evm/params"
+	"github.com/ava-labs/subnet-evm/plugin/evm/message"
 	"github.com/ava-labs/subnet-evm/precompile/contract"
+	"github.com/ava-labs/subnet-evm/precompile/contracts/warp"
 	"github.com/ava-labs/subnet-evm/predicate"
-	subnetEVMUtils "github.com/ava-labs/subnet-evm/utils"
-	"github.com/ava-labs/subnet-evm/x/warp"
+	"github.com/ava-labs/subnet-evm/utils"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/stretchr/testify/require"
@@ -46,9 +47,9 @@ var (
 func TestSendWarpMessage(t *testing.T) {
 	require := require.New(t)
 	genesis := &core.Genesis{}
-	require.NoError(genesis.UnmarshalJSON([]byte(genesisJSONDUpgrade)))
+	require.NoError(genesis.UnmarshalJSON([]byte(genesisJSONDurango)))
 	genesis.Config.GenesisPrecompiles = params.Precompiles{
-		warp.ConfigKey: warp.NewDefaultConfig(subnetEVMUtils.NewUint64(0)),
+		warp.ConfigKey: warp.NewDefaultConfig(utils.NewUint64(0)),
 	}
 	genesisJSON, err := genesis.MarshalJSON()
 	require.NoError(err)
@@ -62,7 +63,7 @@ func TestSendWarpMessage(t *testing.T) {
 	logsSub := vm.eth.APIBackend.SubscribeAcceptedLogsEvent(acceptedLogsChan)
 	defer logsSub.Unsubscribe()
 
-	payloadData := utils.RandomBytes(100)
+	payloadData := avagoUtils.RandomBytes(100)
 
 	warpSendMessageInput, err := warp.PackSendWarpMessage(payloadData)
 	require.NoError(err)
@@ -246,9 +247,9 @@ func TestValidateInvalidWarpBlockHash(t *testing.T) {
 func testWarpVMTransaction(t *testing.T, unsignedMessage *avalancheWarp.UnsignedMessage, validSignature bool, txPayload []byte) {
 	require := require.New(t)
 	genesis := &core.Genesis{}
-	require.NoError(genesis.UnmarshalJSON([]byte(genesisJSONDUpgrade)))
+	require.NoError(genesis.UnmarshalJSON([]byte(genesisJSONDurango)))
 	genesis.Config.GenesisPrecompiles = params.Precompiles{
-		warp.ConfigKey: warp.NewDefaultConfig(subnetEVMUtils.NewUint64(0)),
+		warp.ConfigKey: warp.NewDefaultConfig(utils.NewUint64(0)),
 	}
 	genesisJSON, err := genesis.MarshalJSON()
 	require.NoError(err)
@@ -403,9 +404,9 @@ func testWarpVMTransaction(t *testing.T, unsignedMessage *avalancheWarp.Unsigned
 func TestReceiveWarpMessage(t *testing.T) {
 	require := require.New(t)
 	genesis := &core.Genesis{}
-	require.NoError(genesis.UnmarshalJSON([]byte(genesisJSONDUpgrade)))
+	require.NoError(genesis.UnmarshalJSON([]byte(genesisJSONDurango)))
 	genesis.Config.GenesisPrecompiles = params.Precompiles{
-		warp.ConfigKey: warp.NewDefaultConfig(subnetEVMUtils.NewUint64(0)),
+		warp.ConfigKey: warp.NewDefaultConfig(utils.NewUint64(0)),
 	}
 	genesisJSON, err := genesis.MarshalJSON()
 	require.NoError(err)
@@ -419,7 +420,7 @@ func TestReceiveWarpMessage(t *testing.T) {
 	logsSub := vm.eth.APIBackend.SubscribeAcceptedLogsEvent(acceptedLogsChan)
 	defer logsSub.Unsubscribe()
 
-	payloadData := utils.RandomBytes(100)
+	payloadData := avagoUtils.RandomBytes(100)
 
 	addressedPayload, err := payload.NewAddressedCall(
 		testEthAddrs[0].Bytes(),
@@ -582,4 +583,120 @@ func TestReceiveWarpMessage(t *testing.T) {
 	txTraceResultBytes, err := json.Marshal(txTraceResult)
 	require.NoError(err)
 	require.JSONEq(string(txTraceResultBytes), string(blockTxTraceResultBytes))
+}
+
+func TestMessageSignatureRequestsToVM(t *testing.T) {
+	_, vm, _, appSender := GenesisVM(t, true, genesisJSONSubnetEVM, "", "")
+
+	defer func() {
+		err := vm.Shutdown(context.Background())
+		require.NoError(t, err)
+	}()
+
+	// Generate a new warp unsigned message and add to warp backend
+	warpMessage, err := avalancheWarp.NewUnsignedMessage(vm.ctx.NetworkID, vm.ctx.ChainID, []byte{1, 2, 3})
+	require.NoError(t, err)
+
+	// Add the known message and get its signature to confirm.
+	err = vm.warpBackend.AddMessage(warpMessage)
+	require.NoError(t, err)
+	signature, err := vm.warpBackend.GetMessageSignature(warpMessage.ID())
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		messageID        ids.ID
+		expectedResponse [bls.SignatureLen]byte
+	}{
+		"known": {
+			messageID:        warpMessage.ID(),
+			expectedResponse: signature,
+		},
+		"unknown": {
+			messageID:        ids.GenerateTestID(),
+			expectedResponse: [bls.SignatureLen]byte{},
+		},
+	}
+
+	for name, test := range tests {
+		calledSendAppResponseFn := false
+		appSender.SendAppResponseF = func(ctx context.Context, nodeID ids.NodeID, requestID uint32, responseBytes []byte) error {
+			calledSendAppResponseFn = true
+			var response message.SignatureResponse
+			_, err := message.Codec.Unmarshal(responseBytes, &response)
+			require.NoError(t, err)
+			require.Equal(t, test.expectedResponse, response.Signature)
+
+			return nil
+		}
+		t.Run(name, func(t *testing.T) {
+			var signatureRequest message.Request = message.MessageSignatureRequest{
+				MessageID: test.messageID,
+			}
+
+			requestBytes, err := message.Codec.Marshal(message.Version, &signatureRequest)
+			require.NoError(t, err)
+
+			// Send the app request and make sure we called SendAppResponseFn
+			deadline := time.Now().Add(60 * time.Second)
+			err = vm.Network.AppRequest(context.Background(), ids.GenerateTestNodeID(), 1, deadline, requestBytes)
+			require.NoError(t, err)
+			require.True(t, calledSendAppResponseFn)
+		})
+	}
+}
+
+func TestBlockSignatureRequestsToVM(t *testing.T) {
+	_, vm, _, appSender := GenesisVM(t, true, genesisJSONSubnetEVM, "", "")
+
+	defer func() {
+		err := vm.Shutdown(context.Background())
+		require.NoError(t, err)
+	}()
+
+	lastAcceptedID, err := vm.LastAccepted(context.Background())
+	require.NoError(t, err)
+
+	signature, err := vm.warpBackend.GetBlockSignature(lastAcceptedID)
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		blockID          ids.ID
+		expectedResponse [bls.SignatureLen]byte
+	}{
+		"known": {
+			blockID:          lastAcceptedID,
+			expectedResponse: signature,
+		},
+		"unknown": {
+			blockID:          ids.GenerateTestID(),
+			expectedResponse: [bls.SignatureLen]byte{},
+		},
+	}
+
+	for name, test := range tests {
+		calledSendAppResponseFn := false
+		appSender.SendAppResponseF = func(ctx context.Context, nodeID ids.NodeID, requestID uint32, responseBytes []byte) error {
+			calledSendAppResponseFn = true
+			var response message.SignatureResponse
+			_, err := message.Codec.Unmarshal(responseBytes, &response)
+			require.NoError(t, err)
+			require.Equal(t, test.expectedResponse, response.Signature)
+
+			return nil
+		}
+		t.Run(name, func(t *testing.T) {
+			var signatureRequest message.Request = message.BlockSignatureRequest{
+				BlockID: test.blockID,
+			}
+
+			requestBytes, err := message.Codec.Marshal(message.Version, &signatureRequest)
+			require.NoError(t, err)
+
+			// Send the app request and make sure we called SendAppResponseFn
+			deadline := time.Now().Add(60 * time.Second)
+			err = vm.Network.AppRequest(context.Background(), ids.GenerateTestNodeID(), 1, deadline, requestBytes)
+			require.NoError(t, err)
+			require.True(t, calledSendAppResponseFn)
+		})
+	}
 }

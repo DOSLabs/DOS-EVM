@@ -7,13 +7,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ava-labs/subnet-evm/params"
-
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ava-labs/avalanchego/utils/crypto/bls"
 	"github.com/ava-labs/avalanchego/utils/set"
 	avalancheWarp "github.com/ava-labs/avalanchego/vms/platformvm/warp"
+	"github.com/ava-labs/subnet-evm/precompile/contracts/warp"
 )
 
 type AggregateSignatureResult struct {
@@ -39,8 +38,7 @@ type Aggregator struct {
 	client      SignatureGetter
 }
 
-// New returns a signature aggregator for the chain with the given [state] on the
-// given [subnetID], and where [client] can be used to fetch signatures from validators.
+// New returns a signature aggregator that will attempt to aggregate signatures from [validators].
 func New(client SignatureGetter, validators []*avalancheWarp.Validator, totalWeight uint64) *Aggregator {
 	return &Aggregator{
 		client:      client,
@@ -131,7 +129,7 @@ func (a *Aggregator) AggregateSignatures(ctx context.Context, unsignedMessage *a
 		)
 
 		// If the signature weight meets the requested threshold, cancel signature fetching
-		if err := avalancheWarp.VerifyWeight(signaturesWeight, a.totalWeight, quorumNum, params.WarpQuorumDenominator); err == nil {
+		if err := avalancheWarp.VerifyWeight(signaturesWeight, a.totalWeight, quorumNum, warp.WarpQuorumDenominator); err == nil {
 			log.Debug("Verify weight passed, exiting aggregation early",
 				"quorumNum", quorumNum,
 				"totalWeight", a.totalWeight,

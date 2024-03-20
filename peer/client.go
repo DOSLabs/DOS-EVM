@@ -34,9 +34,6 @@ type NetworkClient interface {
 	// Returns response bytes, and ErrRequestFailed if the request failed.
 	SendCrossChainRequest(ctx context.Context, chainID ids.ID, request []byte) ([]byte, error)
 
-	// Gossip sends given gossip message to peers
-	Gossip(gossip []byte) error
-
 	// TrackBandwidth should be called for each valid request with the bandwidth
 	// (length of response divided by request time), and with 0 if the response is invalid.
 	TrackBandwidth(nodeID ids.NodeID, bandwidth float64)
@@ -66,16 +63,8 @@ func (c *client) SendAppRequestAny(ctx context.Context, minVersion *version.Appl
 	if err != nil {
 		return nil, nodeID, err
 	}
-
-	select {
-	case <-ctx.Done():
-		return nil, nodeID, ctx.Err()
-	case response := <-waitingHandler.responseChan:
-		if waitingHandler.failed {
-			return nil, nodeID, ErrRequestFailed
-		}
-		return response, nodeID, nil
-	}
+	response, err := waitingHandler.WaitForResult(ctx)
+	return response, nodeID, err
 }
 
 // SendAppRequest synchronously sends request to the specified nodeID
@@ -85,16 +74,7 @@ func (c *client) SendAppRequest(ctx context.Context, nodeID ids.NodeID, request 
 	if err := c.network.SendAppRequest(ctx, nodeID, request, waitingHandler); err != nil {
 		return nil, err
 	}
-
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case response := <-waitingHandler.responseChan:
-		if waitingHandler.failed {
-			return nil, ErrRequestFailed
-		}
-		return response, nil
-	}
+	return waitingHandler.WaitForResult(ctx)
 }
 
 // SendCrossChainRequest synchronously sends request to the specified chainID
@@ -104,19 +84,7 @@ func (c *client) SendCrossChainRequest(ctx context.Context, chainID ids.ID, requ
 	if err := c.network.SendCrossChainRequest(ctx, chainID, request, waitingHandler); err != nil {
 		return nil, err
 	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case response := <-waitingHandler.responseChan:
-		if waitingHandler.failed {
-			return nil, ErrRequestFailed
-		}
-		return response, nil
-	}
-}
-
-func (c *client) Gossip(gossip []byte) error {
-	return c.network.Gossip(gossip)
+	return waitingHandler.WaitForResult(ctx)
 }
 
 func (c *client) TrackBandwidth(nodeID ids.NodeID, bandwidth float64) {

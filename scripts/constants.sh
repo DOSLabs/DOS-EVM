@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 
+# Ignore warnings about variables appearing unused since this file is not the consumer of the variables it defines.
+# shellcheck disable=SC2034
+
+set -euo pipefail
+
 # Set the PATHS
 GOPATH="$(go env GOPATH)"
 
 # Avalabs docker hub
-DOCKERHUB_REPO="avaplatform/avalanchego"
+DOCKERHUB_REPO="avaplatform/subnet-evm"
 
 # if this isn't a git repository (say building from a release), don't set our git constants.
 if [ ! -d .git ]; then

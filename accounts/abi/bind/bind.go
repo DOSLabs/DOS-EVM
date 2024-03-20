@@ -151,7 +151,7 @@ func BindHelper(types []string, abis []string, bytecodes []string, fsigs []map[s
 			normalized := original
 			normalizedName := methodNormalizer[lang](alias(aliases, original.Name))
 			// Ensure there is no duplicated identifier
-			identifiers := callIdentifiers
+			var identifiers = callIdentifiers
 			if !original.IsConstant() {
 				identifiers = transactIdentifiers
 			}
@@ -313,6 +313,7 @@ func BindHelper(types []string, abis []string, bytecodes []string, fsigs []map[s
 
 	funcs := map[string]interface{}{
 		"bindtype":      bindType[lang],
+		"add":           add,
 		"bindtypenew":   bindTypeNew[lang],
 		"bindtopictype": bindTopicType[lang],
 		"namedtype":     namedType[lang],
@@ -570,4 +571,8 @@ func hasStruct(t abi.Type) bool {
 
 func mkList(args ...interface{}) []interface{} {
 	return args
+}
+
+func add(a, b int) int {
+	return a + b
 }

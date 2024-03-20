@@ -81,9 +81,9 @@ var (
 	// Use chainId: 43111, so that it does not overlap with any Avalanche ChainIDs, which may have their
 	// config overridden in vm.Initialize.
 	genesisJSONSubnetEVM    = "{\"config\":{\"chainId\":43111,\"homesteadBlock\":0,\"eip150Block\":0,\"eip155Block\":0,\"eip158Block\":0,\"byzantiumBlock\":0,\"constantinopleBlock\":0,\"petersburgBlock\":0,\"istanbulBlock\":0,\"muirGlacierBlock\":0,\"subnetEVMTimestamp\":0},\"nonce\":\"0x0\",\"timestamp\":\"0x0\",\"extraData\":\"0x00\",\"gasLimit\":\"0x7A1200\",\"difficulty\":\"0x0\",\"mixHash\":\"0x0000000000000000000000000000000000000000000000000000000000000000\",\"coinbase\":\"0x0000000000000000000000000000000000000000\",\"alloc\":{\"0x71562b71999873DB5b286dF957af199Ec94617F7\": {\"balance\":\"0x4192927743b88000\"}, \"0x703c4b2bD70c169f5717101CaeE543299Fc946C7\": {\"balance\":\"0x4192927743b88000\"}},\"number\":\"0x0\",\"gasUsed\":\"0x0\",\"parentHash\":\"0x0000000000000000000000000000000000000000000000000000000000000000\"}"
-	genesisJSONDUpgrade     = "{\"config\":{\"chainId\":43111,\"homesteadBlock\":0,\"eip150Block\":0,\"eip155Block\":0,\"eip158Block\":0,\"byzantiumBlock\":0,\"constantinopleBlock\":0,\"petersburgBlock\":0,\"istanbulBlock\":0,\"muirGlacierBlock\":0,\"subnetEVMTimestamp\":0,\"dUpgradeTimestamp\":0},\"nonce\":\"0x0\",\"timestamp\":\"0x0\",\"extraData\":\"0x00\",\"gasLimit\":\"0x7A1200\",\"difficulty\":\"0x0\",\"mixHash\":\"0x0000000000000000000000000000000000000000000000000000000000000000\",\"coinbase\":\"0x0000000000000000000000000000000000000000\",\"alloc\":{\"0x71562b71999873DB5b286dF957af199Ec94617F7\": {\"balance\":\"0x4192927743b88000\"}, \"0x703c4b2bD70c169f5717101CaeE543299Fc946C7\": {\"balance\":\"0x4192927743b88000\"}},\"number\":\"0x0\",\"gasUsed\":\"0x0\",\"parentHash\":\"0x0000000000000000000000000000000000000000000000000000000000000000\"}"
+	genesisJSONDurango      = "{\"config\":{\"chainId\":43111,\"homesteadBlock\":0,\"eip150Block\":0,\"eip155Block\":0,\"eip158Block\":0,\"byzantiumBlock\":0,\"constantinopleBlock\":0,\"petersburgBlock\":0,\"istanbulBlock\":0,\"muirGlacierBlock\":0,\"subnetEVMTimestamp\":0,\"durangoTimestamp\":0},\"nonce\":\"0x0\",\"timestamp\":\"0x0\",\"extraData\":\"0x00\",\"gasLimit\":\"0x7A1200\",\"difficulty\":\"0x0\",\"mixHash\":\"0x0000000000000000000000000000000000000000000000000000000000000000\",\"coinbase\":\"0x0000000000000000000000000000000000000000\",\"alloc\":{\"0x71562b71999873DB5b286dF957af199Ec94617F7\": {\"balance\":\"0x4192927743b88000\"}, \"0x703c4b2bD70c169f5717101CaeE543299Fc946C7\": {\"balance\":\"0x4192927743b88000\"}},\"number\":\"0x0\",\"gasUsed\":\"0x0\",\"parentHash\":\"0x0000000000000000000000000000000000000000000000000000000000000000\"}"
 	genesisJSONPreSubnetEVM = "{\"config\":{\"chainId\":43111,\"homesteadBlock\":0,\"eip150Block\":0,\"eip155Block\":0,\"eip158Block\":0,\"byzantiumBlock\":0,\"constantinopleBlock\":0,\"petersburgBlock\":0,\"istanbulBlock\":0,\"muirGlacierBlock\":0},\"nonce\":\"0x0\",\"timestamp\":\"0x0\",\"extraData\":\"0x00\",\"gasLimit\":\"0x7A1200\",\"difficulty\":\"0x0\",\"mixHash\":\"0x0000000000000000000000000000000000000000000000000000000000000000\",\"coinbase\":\"0x0000000000000000000000000000000000000000\",\"alloc\":{\"0x71562b71999873DB5b286dF957af199Ec94617F7\": {\"balance\":\"0x4192927743b88000\"}, \"0x703c4b2bD70c169f5717101CaeE543299Fc946C7\": {\"balance\":\"0x4192927743b88000\"}},\"number\":\"0x0\",\"gasUsed\":\"0x0\",\"parentHash\":\"0x0000000000000000000000000000000000000000000000000000000000000000\"}"
-	genesisJSONLatest       = genesisJSONDUpgrade
+	genesisJSONLatest       = genesisJSONDurango
 
 	firstTxAmount  = new(big.Int).Mul(big.NewInt(testMinGasPrice), big.NewInt(21000*100))
 	genesisBalance = new(big.Int).Mul(big.NewInt(testMinGasPrice), big.NewInt(21000*1000))
@@ -120,9 +120,9 @@ func buildGenesisTest(t *testing.T, genesisJSON string) []byte {
 }
 
 func NewContext() *snow.Context {
-	ctx := snow.DefaultContextTest()
-	ctx.NetworkID = testNetworkID
+	ctx := utils.TestSnowContext()
 	ctx.NodeID = ids.GenerateTestNodeID()
+	ctx.NetworkID = testNetworkID
 	ctx.ChainID = testCChainID
 	ctx.AVAXAssetID = testAvaxAssetID
 	ctx.XChainID = testXChainID
@@ -153,6 +153,7 @@ func NewContext() *snow.Context {
 	return ctx
 }
 
+// setupGenesis sets up the genesis
 // If [genesisJSON] is empty, defaults to using [genesisJSONLatest]
 func setupGenesis(
 	t *testing.T,
@@ -207,7 +208,7 @@ func GenesisVM(t *testing.T,
 	ctx, dbManager, genesisBytes, issuer, _ := setupGenesis(t, genesisJSON)
 	appSender := &commonEng.SenderTest{T: t}
 	appSender.CantSendAppGossip = true
-	appSender.SendAppGossipF = func(context.Context, []byte) error { return nil }
+	appSender.SendAppGossipF = func(context.Context, []byte, int, int, int) error { return nil }
 	err := vm.Initialize(
 		context.Background(),
 		ctx,
@@ -293,12 +294,17 @@ func TestVMUpgrades(t *testing.T) {
 			genesis:          genesisJSONSubnetEVM,
 			expectedGasPrice: big.NewInt(0),
 		},
+		{
+			name:             "Durango",
+			genesis:          genesisJSONDurango,
+			expectedGasPrice: big.NewInt(0),
+		},
 	}
 	for _, test := range genesisTests {
 		t.Run(test.name, func(t *testing.T) {
 			_, vm, _, _ := GenesisVM(t, true, test.genesis, "", "")
 
-			if gasPrice := vm.txPool.GasPrice(); gasPrice.Cmp(test.expectedGasPrice) != 0 {
+			if gasPrice := vm.txPool.GasTip(); gasPrice.Cmp(test.expectedGasPrice) != 0 {
 				t.Fatalf("Expected pool gas price to be %d but found %d", test.expectedGasPrice, gasPrice)
 			}
 			defer func() {
@@ -1070,7 +1076,7 @@ func TestNonCanonicalAccept(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	vm1.blockChain.GetVMConfig().AllowUnfinalizedQueries = true
+	vm1.eth.APIBackend.SetAllowUnfinalizedQueries(true)
 
 	blkBHeight := vm1BlkB.Height()
 	blkBHash := vm1BlkB.(*chain.BlockWrapper).Block.(*Block).ethBlock.Hash()
@@ -1241,7 +1247,7 @@ func TestStickyPreference(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	vm1.blockChain.GetVMConfig().AllowUnfinalizedQueries = true
+	vm1.eth.APIBackend.SetAllowUnfinalizedQueries(true)
 
 	blkBHeight := vm1BlkB.Height()
 	blkBHash := vm1BlkB.(*chain.BlockWrapper).Block.(*Block).ethBlock.Hash()
@@ -1940,7 +1946,7 @@ func TestLastAcceptedBlockNumberAllow(t *testing.T) {
 	blkHeight := blk.Height()
 	blkHash := blk.(*chain.BlockWrapper).Block.(*Block).ethBlock.Hash()
 
-	vm.blockChain.GetVMConfig().AllowUnfinalizedQueries = true
+	vm.eth.APIBackend.SetAllowUnfinalizedQueries(true)
 
 	ctx := context.Background()
 	b, err := vm.eth.APIBackend.BlockByNumber(ctx, rpc.BlockNumber(blkHeight))
@@ -1951,7 +1957,7 @@ func TestLastAcceptedBlockNumberAllow(t *testing.T) {
 		t.Fatalf("expected block at %d to have hash %s but got %s", blkHeight, blkHash.Hex(), b.Hash().Hex())
 	}
 
-	vm.blockChain.GetVMConfig().AllowUnfinalizedQueries = false
+	vm.eth.APIBackend.SetAllowUnfinalizedQueries(false)
 
 	_, err = vm.eth.APIBackend.BlockByNumber(ctx, rpc.BlockNumber(blkHeight))
 	if !errors.Is(err, eth.ErrUnfinalizedData) {
@@ -1988,7 +1994,7 @@ func TestConfigureLogLevel(t *testing.T) {
 			ctx, dbManager, genesisBytes, issuer, _ := setupGenesis(t, test.genesisJSON)
 			appSender := &commonEng.SenderTest{T: t}
 			appSender.CantSendAppGossip = true
-			appSender.SendAppGossipF = func(context.Context, []byte) error { return nil }
+			appSender.SendAppGossipF = func(context.Context, []byte, int, int, int) error { return nil }
 			err := vm.Initialize(
 				context.Background(),
 				ctx,
@@ -2076,7 +2082,7 @@ func TestBuildSubnetEVMBlock(t *testing.T) {
 		}
 		txs[i] = signedTx
 	}
-	errs := vm.txPool.AddRemotes(txs)
+	errs := vm.txPool.AddRemotesSync(txs)
 	for i, err := range errs {
 		if err != nil {
 			t.Fatalf("Failed to add tx at index %d: %s", i, err)
@@ -2190,29 +2196,29 @@ func TestTxAllowListSuccessfulTx(t *testing.T) {
 	managerKey := testKeys[1]
 	managerAddress := testEthAddrs[1]
 	genesis := &core.Genesis{}
-	if err := genesis.UnmarshalJSON([]byte(genesisJSONDUpgrade)); err != nil {
+	if err := genesis.UnmarshalJSON([]byte(genesisJSONDurango)); err != nil {
 		t.Fatal(err)
 	}
-	// this manager role should not be activated because DUpgradeTimestamp is in the future
+	// this manager role should not be activated because DurangoTimestamp is in the future
 	genesis.Config.GenesisPrecompiles = params.Precompiles{
 		txallowlist.ConfigKey: txallowlist.NewConfig(utils.NewUint64(0), testEthAddrs[0:1], nil, nil),
 	}
-	dUpgradeTime := time.Now().Add(10 * time.Hour)
-	genesis.Config.DUpgradeTimestamp = utils.TimeToNewUint64(dUpgradeTime)
+	durangoTime := time.Now().Add(10 * time.Hour)
+	genesis.Config.DurangoTimestamp = utils.TimeToNewUint64(durangoTime)
 	genesisJSON, err := genesis.MarshalJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// prepare the new upgrade bytes to disable the TxAllowList
-	disableAllowListTime := dUpgradeTime.Add(10 * time.Hour)
+	disableAllowListTime := durangoTime.Add(10 * time.Hour)
 	reenableAllowlistTime := disableAllowListTime.Add(10 * time.Hour)
 	upgradeConfig := &params.UpgradeConfig{
 		PrecompileUpgrades: []params.PrecompileUpgrade{
 			{
 				Config: txallowlist.NewDisableConfig(utils.TimeToNewUint64(disableAllowListTime)),
 			},
-			// re-enable the tx allowlist after DUpgrade to set the manager role
+			// re-enable the tx allowlist after Durango to set the manager role
 			{
 				Config: txallowlist.NewConfig(utils.TimeToNewUint64(reenableAllowlistTime), testEthAddrs[0:1], nil, []common.Address{managerAddress}),
 			},
@@ -2245,7 +2251,7 @@ func TestTxAllowListSuccessfulTx(t *testing.T) {
 	if role != allowlist.NoRole {
 		t.Fatalf("Expected allow list status to be set to no role: %s, but found: %s", allowlist.NoRole, role)
 	}
-	// Should not be a manager role because DUpgrade has not activated yet
+	// Should not be a manager role because Durango has not activated yet
 	role = txallowlist.GetTxAllowListStatus(genesisState, managerAddress)
 	require.Equal(t, allowlist.NoRole, role)
 
@@ -2343,11 +2349,11 @@ func TestTxAllowListSuccessfulTx(t *testing.T) {
 
 func TestVerifyManagerConfig(t *testing.T) {
 	genesis := &core.Genesis{}
-	require.NoError(t, genesis.UnmarshalJSON([]byte(genesisJSONDUpgrade)))
+	require.NoError(t, genesis.UnmarshalJSON([]byte(genesisJSONDurango)))
 
-	dUpgradeTimestamp := time.Now().Add(10 * time.Hour)
-	genesis.Config.DUpgradeTimestamp = utils.TimeToNewUint64(dUpgradeTimestamp)
-	// this manager role should not be activated because DUpgradeTimestamp is in the future
+	durangoTimestamp := time.Now().Add(10 * time.Hour)
+	genesis.Config.DurangoTimestamp = utils.TimeToNewUint64(durangoTimestamp)
+	// this manager role should not be activated because DurangoTimestamp is in the future
 	genesis.Config.GenesisPrecompiles = params.Precompiles{
 		txallowlist.ConfigKey: txallowlist.NewConfig(utils.NewUint64(0), testEthAddrs[0:1], nil, []common.Address{testEthAddrs[1]}),
 	}
@@ -2368,18 +2374,18 @@ func TestVerifyManagerConfig(t *testing.T) {
 		[]*commonEng.Fx{},
 		nil,
 	)
-	require.ErrorIs(t, err, allowlist.ErrCannotAddManagersBeforeDUpgrade)
+	require.ErrorIs(t, err, allowlist.ErrCannotAddManagersBeforeDurango)
 
 	genesis = &core.Genesis{}
-	require.NoError(t, genesis.UnmarshalJSON([]byte(genesisJSONDUpgrade)))
-	genesis.Config.DUpgradeTimestamp = utils.TimeToNewUint64(dUpgradeTimestamp)
+	require.NoError(t, genesis.UnmarshalJSON([]byte(genesisJSONDurango)))
+	genesis.Config.DurangoTimestamp = utils.TimeToNewUint64(durangoTimestamp)
 	genesisJSON, err = genesis.MarshalJSON()
 	require.NoError(t, err)
-	// use an invalid upgrade now with managers set before DUpgrade
+	// use an invalid upgrade now with managers set before Durango
 	upgradeConfig := &params.UpgradeConfig{
 		PrecompileUpgrades: []params.PrecompileUpgrade{
 			{
-				Config: txallowlist.NewConfig(utils.TimeToNewUint64(dUpgradeTimestamp.Add(-time.Second)), nil, nil, []common.Address{testEthAddrs[1]}),
+				Config: txallowlist.NewConfig(utils.TimeToNewUint64(durangoTimestamp.Add(-time.Second)), nil, nil, []common.Address{testEthAddrs[1]}),
 			},
 		},
 	}
@@ -2399,7 +2405,7 @@ func TestVerifyManagerConfig(t *testing.T) {
 		[]*commonEng.Fx{},
 		nil,
 	)
-	require.ErrorIs(t, err, allowlist.ErrCannotAddManagersBeforeDUpgrade)
+	require.ErrorIs(t, err, allowlist.ErrCannotAddManagersBeforeDurango)
 }
 
 // Test that the tx allow list allows whitelisted transactions and blocks non-whitelisted addresses
@@ -2638,7 +2644,7 @@ func TestFeeManagerChangeFee(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = vm.txPool.AddRemote(signedTx2)
+	err = vm.txPool.AddRemotesSync([]*types.Transaction{signedTx2})[0]
 	require.ErrorIs(t, err, txpool.ErrUnderpriced)
 }
 
@@ -2813,7 +2819,7 @@ func TestRewardManagerPrecompileSetRewardAddress(t *testing.T) {
 	data, err := rewardmanager.PackSetRewardAddress(testAddr)
 	require.NoError(t, err)
 
-	gas := 21000 + 240 + rewardmanager.SetRewardAddressGasCost // 21000 for tx, 240 for tx data
+	gas := 21000 + 240 + rewardmanager.SetRewardAddressGasCost + rewardmanager.RewardAddressChangedEventGasCost // 21000 for tx, 240 for tx data
 
 	tx := types.NewTransaction(uint64(0), rewardmanager.ContractAddress, big.NewInt(1), gas, big.NewInt(testMinGasPrice), data)
 
@@ -2951,7 +2957,7 @@ func TestRewardManagerPrecompileAllowFeeRecipients(t *testing.T) {
 	data, err := rewardmanager.PackAllowFeeRecipients()
 	require.NoError(t, err)
 
-	gas := 21000 + 240 + rewardmanager.AllowFeeRecipientsGasCost // 21000 for tx, 240 for tx data
+	gas := 21000 + 240 + rewardmanager.SetRewardAddressGasCost + rewardmanager.RewardAddressChangedEventGasCost // 21000 for tx, 240 for tx data
 
 	tx := types.NewTransaction(uint64(0), rewardmanager.ContractAddress, big.NewInt(1), gas, big.NewInt(testMinGasPrice), data)
 
@@ -3263,120 +3269,4 @@ func TestCrossChainMessagestoVM(t *testing.T) {
 	err = vm.Network.CrossChainAppRequest(context.Background(), requestingChainID, 1, time.Now().Add(60*time.Second), crossChainRequest)
 	require.NoError(err)
 	require.True(calledSendCrossChainAppResponseFn, "sendCrossChainAppResponseFn was not called")
-}
-
-func TestMessageSignatureRequestsToVM(t *testing.T) {
-	_, vm, _, appSender := GenesisVM(t, true, genesisJSONSubnetEVM, "", "")
-
-	defer func() {
-		err := vm.Shutdown(context.Background())
-		require.NoError(t, err)
-	}()
-
-	// Generate a new warp unsigned message and add to warp backend
-	warpMessage, err := avalancheWarp.NewUnsignedMessage(vm.ctx.NetworkID, vm.ctx.ChainID, []byte{1, 2, 3})
-	require.NoError(t, err)
-
-	// Add the known message and get its signature to confirm.
-	err = vm.warpBackend.AddMessage(warpMessage)
-	require.NoError(t, err)
-	signature, err := vm.warpBackend.GetMessageSignature(warpMessage.ID())
-	require.NoError(t, err)
-
-	tests := map[string]struct {
-		messageID        ids.ID
-		expectedResponse [bls.SignatureLen]byte
-	}{
-		"known": {
-			messageID:        warpMessage.ID(),
-			expectedResponse: signature,
-		},
-		"unknown": {
-			messageID:        ids.GenerateTestID(),
-			expectedResponse: [bls.SignatureLen]byte{},
-		},
-	}
-
-	for name, test := range tests {
-		calledSendAppResponseFn := false
-		appSender.SendAppResponseF = func(ctx context.Context, nodeID ids.NodeID, requestID uint32, responseBytes []byte) error {
-			calledSendAppResponseFn = true
-			var response message.SignatureResponse
-			_, err := message.Codec.Unmarshal(responseBytes, &response)
-			require.NoError(t, err)
-			require.Equal(t, test.expectedResponse, response.Signature)
-
-			return nil
-		}
-		t.Run(name, func(t *testing.T) {
-			var signatureRequest message.Request = message.MessageSignatureRequest{
-				MessageID: test.messageID,
-			}
-
-			requestBytes, err := message.Codec.Marshal(message.Version, &signatureRequest)
-			require.NoError(t, err)
-
-			// Send the app request and make sure we called SendAppResponseFn
-			deadline := time.Now().Add(60 * time.Second)
-			err = vm.Network.AppRequest(context.Background(), ids.GenerateTestNodeID(), 1, deadline, requestBytes)
-			require.NoError(t, err)
-			require.True(t, calledSendAppResponseFn)
-		})
-	}
-}
-
-func TestBlockSignatureRequestsToVM(t *testing.T) {
-	_, vm, _, appSender := GenesisVM(t, true, genesisJSONSubnetEVM, "", "")
-
-	defer func() {
-		err := vm.Shutdown(context.Background())
-		require.NoError(t, err)
-	}()
-
-	lastAcceptedID, err := vm.LastAccepted(context.Background())
-	require.NoError(t, err)
-
-	signature, err := vm.warpBackend.GetBlockSignature(lastAcceptedID)
-	require.NoError(t, err)
-
-	tests := map[string]struct {
-		blockID          ids.ID
-		expectedResponse [bls.SignatureLen]byte
-	}{
-		"known": {
-			blockID:          lastAcceptedID,
-			expectedResponse: signature,
-		},
-		"unknown": {
-			blockID:          ids.GenerateTestID(),
-			expectedResponse: [bls.SignatureLen]byte{},
-		},
-	}
-
-	for name, test := range tests {
-		calledSendAppResponseFn := false
-		appSender.SendAppResponseF = func(ctx context.Context, nodeID ids.NodeID, requestID uint32, responseBytes []byte) error {
-			calledSendAppResponseFn = true
-			var response message.SignatureResponse
-			_, err := message.Codec.Unmarshal(responseBytes, &response)
-			require.NoError(t, err)
-			require.Equal(t, test.expectedResponse, response.Signature)
-
-			return nil
-		}
-		t.Run(name, func(t *testing.T) {
-			var signatureRequest message.Request = message.BlockSignatureRequest{
-				BlockID: test.blockID,
-			}
-
-			requestBytes, err := message.Codec.Marshal(message.Version, &signatureRequest)
-			require.NoError(t, err)
-
-			// Send the app request and make sure we called SendAppResponseFn
-			deadline := time.Now().Add(60 * time.Second)
-			err = vm.Network.AppRequest(context.Background(), ids.GenerateTestNodeID(), 1, deadline, requestBytes)
-			require.NoError(t, err)
-			require.True(t, calledSendAppResponseFn)
-		})
-	}
 }
